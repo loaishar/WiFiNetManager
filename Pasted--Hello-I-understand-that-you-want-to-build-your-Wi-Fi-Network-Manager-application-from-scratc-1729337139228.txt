@@ -1,0 +1,991 @@
+**Hello!**
+
+I understand that you want to build your Wi-Fi Network Manager application from scratch. I'll provide a comprehensive guide with clear explanations for each file and the project structure so that you can set up a working application. This guide will cover both the backend (Flask) and frontend (React) parts of the application.
+
+---
+
+## **Project Overview**
+
+The Wi-Fi Network Manager is a web application that allows users to:
+
+- **Register** and **log in** to the system.
+- **View** connected devices on the network.
+- **Block** or **unblock** devices.
+- **Monitor** network usage and analytics.
+
+---
+
+## **Technologies Used**
+
+- **Backend:**
+  - **Python** with **Flask** (web framework).
+  - **Flask SQLAlchemy** (ORM for database interactions).
+  - **Flask Migrate** (database migrations).
+  - **JWT (JSON Web Tokens)** for authentication.
+- **Frontend:**
+  - **React** for building user interfaces.
+  - **React Router** for client-side routing.
+  - **UI Library:** We'll use basic components; you can replace them with your preferred UI library (e.g., Material-UI, Bootstrap).
+- **Database:**
+  - **SQLite** for simplicity (can be replaced with PostgreSQL or MySQL).
+- **Build Tools:**
+  - **Webpack** and **Babel** for bundling and transpiling frontend code.
+- **Package Managers:**
+  - **pip** for Python dependencies.
+  - **npm** for Node.js dependencies.
+
+---
+
+## **Project Structure**
+
+Here's the recommended directory structure for your project:
+
+```
+project_root/
+├── app.py
+├── models.py
+├── routes.py
+├── network_scanner.py
+├── requirements.txt
+├── package.json
+├── webpack.config.js
+├── .babelrc
+├── static/
+│   ├── css/
+│   │   └── custom.css
+│   └── js/
+│       └── dist/
+│           └── bundle.min.js
+├── templates/
+│   └── index.html
+├── migrations/
+├── src/
+│   ├── index.jsx
+│   └── components/
+│       ├── App.jsx
+│       ├── AuthPage.jsx
+│       └── ConnectedDevices.jsx
+└── README.md
+```
+
+---
+
+## **Detailed File Explanations and Code**
+
+### **1. Backend Files**
+
+#### **1.1. `app.py`**
+
+**Description:**
+
+- The main entry point for the Flask application.
+- Configures the Flask app, initializes extensions, and registers blueprints.
+- Serves the React frontend.
+
+**Code:**
+
+```python
+# app.py
+from flask import Flask, send_from_directory, render_template
+from flask_sqlalchemy import SQLAlchemy
+from flask_cors import CORS
+from flask_migrate import Migrate
+import os
+
+app = Flask(__name__, static_folder='static', template_folder='templates')
+CORS(app, resources={r"/api/*": {"origins": "*"}})
+
+# Configuration
+app.secret_key = os.environ.get("FLASK_SECRET_KEY") or os.urandom(24)
+app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get("DATABASE_URL") or 'sqlite:///database.db'
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+
+# Initialize extensions
+db = SQLAlchemy(app)
+migrate = Migrate(app, db)
+
+# Import models after db initialization
+from models import User, Device, NetworkSettings, NetworkUsage
+
+# Register blueprints
+from routes import api_routes
+app.register_blueprint(api_routes)
+
+# Serve React App
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
+def serve_react_app(path):
+    if path != "" and os.path.exists(os.path.join(app.static_folder, path)):
+        # Serve static files (CSS, JS, images)
+        return send_from_directory(app.static_folder, path)
+    else:
+        # Serve the index.html for React Router
+        return render_template('index.html')
+
+if __name__ == "__main__":
+    app.run(debug=True)
+```
+
+---
+
+#### **1.2. `models.py`**
+
+**Description:**
+
+- Defines the database models using SQLAlchemy.
+- Models include `User`, `Device`, `NetworkSettings`, and `NetworkUsage`.
+
+**Code:**
+
+```python
+# models.py
+from app import db
+from werkzeug.security import generate_password_hash, check_password_hash
+from datetime import datetime
+
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(64), unique=True, nullable=False)
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    password_hash = db.Column(db.String(256))
+
+    def set_password(self, password):
+        self.password_hash = generate_password_hash(password)
+    
+    def check_password(self, password):
+        return check_password_hash(self.password_hash, password)
+
+class Device(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(64), nullable=False)
+    ip_address = db.Column(db.String(15), nullable=False)
+    mac_address = db.Column(db.String(17), nullable=False)
+    connection_type = db.Column(db.String(10), nullable=False)
+    status = db.Column(db.Boolean, default=True)
+    blocked = db.Column(db.Boolean, default=False)
+    data_usage = db.Column(db.Float, default=0.0)
+    last_seen = db.Column(db.DateTime, default=datetime.utcnow)
+    first_seen = db.Column(db.DateTime, default=datetime.utcnow)
+    upload_speed = db.Column(db.Float, default=0.0)
+    download_speed = db.Column(db.Float, default=0.0)
+    signal_strength = db.Column(db.Integer, default=0)  # in dBm
+
+class NetworkSettings(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    ssid = db.Column(db.String(64), nullable=False)
+    password = db.Column(db.String(64), nullable=False)
+
+class NetworkUsage(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    device_id = db.Column(db.Integer, db.ForeignKey('device.id'), nullable=False)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+    data_usage = db.Column(db.Float, default=0.0)
+    upload_speed = db.Column(db.Float, default=0.0)
+    download_speed = db.Column(db.Float, default=0.0)
+
+    device = db.relationship('Device', backref=db.backref('usage_logs', lazy=True))
+```
+
+---
+
+#### **1.3. `routes.py`**
+
+**Description:**
+
+- Contains all the API endpoints for the application.
+- Handles user registration, login, device management, and analytics.
+- Implements JWT authentication.
+
+**Code:**
+
+```python
+# routes.py
+from flask import Blueprint, jsonify, request, current_app
+from models import User, Device, NetworkSettings, NetworkUsage
+from network_scanner import scan_network
+import jwt
+from datetime import datetime, timedelta
+from functools import wraps
+from sqlalchemy import func
+from app import db
+
+api_routes = Blueprint('api_routes', __name__)
+
+def token_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth_header = request.headers.get('Authorization')
+        if not auth_header:
+            return jsonify({'message': 'Token is missing!'}), 401
+        try:
+            token_parts = auth_header.split()
+            if token_parts[0].lower() != 'bearer' or len(token_parts) != 2:
+                return jsonify({'message': 'Token is invalid!'}), 401
+            token = token_parts[1]
+            data = jwt.decode(token, current_app.config['SECRET_KEY'], algorithms=["HS256"])
+            current_user = User.query.filter_by(id=data['user_id']).first()
+            if not current_user:
+                return jsonify({'message': 'User not found!'}), 401
+        except jwt.ExpiredSignatureError:
+            return jsonify({'message': 'Token has expired!'}), 401
+        except jwt.InvalidTokenError:
+            return jsonify({'message': 'Token is invalid!'}), 401
+        return f(current_user, *args, **kwargs)
+    return decorated
+
+@api_routes.route('/api/register', methods=['POST'])
+def register():
+    data = request.get_json()
+    username = data.get('username')
+    email = data.get('email')
+    password = data.get('password')
+    confirm_password = data.get('confirmPassword')
+
+    if not username or not email or not password or not confirm_password:
+        return jsonify({'message': 'All fields are required'}), 400
+
+    if password != confirm_password:
+        return jsonify({'message': 'Passwords do not match'}), 400
+
+    if User.query.filter_by(email=email).first():
+        return jsonify({'message': 'Email already registered'}), 400
+
+    if User.query.filter_by(username=username).first():
+        return jsonify({'message': 'Username already taken'}), 400
+
+    new_user = User(username=username, email=email)
+    new_user.set_password(password)
+    db.session.add(new_user)
+    db.session.commit()
+
+    return jsonify({'message': 'User registered successfully'}), 201
+
+@api_routes.route('/api/login', methods=['POST'])
+def login():
+    data = request.get_json()
+    email = data.get('email')
+    password = data.get('password')
+    if not email or not password:
+        return jsonify({'message': 'Email and password are required'}), 400
+
+    user = User.query.filter_by(email=email).first()
+    if user and user.check_password(password):
+        token = jwt.encode({
+            'user_id': user.id,
+            'exp': datetime.utcnow() + timedelta(hours=24)
+        }, current_app.config['SECRET_KEY'], algorithm="HS256")
+        return jsonify({
+            'token': token,
+            'user': {
+                'username': user.username,
+                'email': user.email
+            }
+        }), 200
+    return jsonify({'message': 'Invalid credentials'}), 401
+
+@api_routes.route('/api/devices', methods=['GET'])
+@token_required
+def get_devices(current_user):
+    devices = Device.query.all()
+    return jsonify([{
+        'id': d.id,
+        'name': d.name,
+        'ip_address': d.ip_address,
+        'mac_address': d.mac_address,
+        'connection_type': d.connection_type,
+        'status': d.status,
+        'blocked': d.blocked,
+        'data_usage': d.data_usage,
+        'last_seen': d.last_seen.isoformat(),
+        'first_seen': d.first_seen.isoformat(),
+        'upload_speed': d.upload_speed,
+        'download_speed': d.download_speed,
+        'signal_strength': d.signal_strength
+    } for d in devices])
+
+@api_routes.route('/api/devices/<int:device_id>/block', methods=['POST'])
+@token_required
+def block_device(current_user, device_id):
+    data = request.get_json()
+    blocked = data.get('blocked', True)
+    device = Device.query.get(device_id)
+    if not device:
+        return jsonify({'message': 'Device not found'}), 404
+    device.blocked = blocked
+    db.session.commit()
+    return jsonify({'message': f'Device {"blocked" if blocked else "unblocked"} successfully'}), 200
+
+# Additional routes for analytics, network settings, etc., can be added here.
+```
+
+---
+
+#### **1.4. `network_scanner.py`**
+
+**Description:**
+
+- Contains functions to scan the network for connected devices.
+- Note: This module requires appropriate permissions and network setup to function correctly.
+
+**Code:**
+
+```python
+# network_scanner.py
+def scan_network():
+    # Placeholder function
+    # Implement actual network scanning logic here
+    # Return a list of devices with their IP and MAC addresses
+    return []
+```
+
+---
+
+#### **1.5. `requirements.txt`**
+
+**Description:**
+
+- Lists all Python dependencies required for the backend.
+
+**Content:**
+
+```
+Flask
+Flask_SQLAlchemy
+Flask_Cors
+Flask_Migrate
+PyJWT
+Werkzeug
+```
+
+---
+
+### **2. Frontend Files**
+
+#### **2.1. `src/index.jsx`**
+
+**Description:**
+
+- Entry point for the React application.
+- Renders the main `App` component.
+
+**Code:**
+
+```jsx
+// src/index.jsx
+import React from 'react';
+import ReactDOM from 'react-dom';
+import App from './components/App';
+
+ReactDOM.render(<App />, document.getElementById('root'));
+```
+
+---
+
+#### **2.2. `src/components/App.jsx`**
+
+**Description:**
+
+- Main component that handles routing between different pages.
+- Uses React Router for client-side routing.
+
+**Code:**
+
+```jsx
+// src/components/App.jsx
+import React from 'react';
+import { BrowserRouter as Router, Route, Switch, Redirect } from 'react-router-dom';
+import AuthPage from './AuthPage';
+import ConnectedDevices from './ConnectedDevices';
+
+function App() {
+  const isAuthenticated = !!localStorage.getItem('token');
+
+  return (
+    <Router>
+      <Switch>
+        <Route path="/login">
+          {isAuthenticated ? <Redirect to="/connected-devices" /> : <AuthPage />}
+        </Route>
+        <Route path="/connected-devices">
+          {isAuthenticated ? <ConnectedDevices /> : <Redirect to="/login" />}
+        </Route>
+        <Route path="/">
+          <Redirect to={isAuthenticated ? "/connected-devices" : "/login"} />
+        </Route>
+      </Switch>
+    </Router>
+  );
+}
+
+export default App;
+```
+
+---
+
+#### **2.3. `src/components/AuthPage.jsx`**
+
+**Description:**
+
+- Component that handles user authentication (login and registration).
+- Contains forms for both login and registration.
+
+**Code:**
+
+```jsx
+// src/components/AuthPage.jsx
+import React, { useState } from 'react';
+import { Wifi } from 'lucide-react';
+
+export default function AuthPage() {
+  const [isLogin, setIsLogin] = useState(true);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    const endpoint = isLogin ? '/api/login' : '/api/register';
+    const formData = new FormData(e.target);
+    const data = Object.fromEntries(formData);
+
+    // For registration, ensure passwords match
+    if (!isLogin && data.password !== data.confirmPassword) {
+      alert('Passwords do not match');
+      return;
+    }
+
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(data),
+      });
+      const result = await response.json();
+
+      if (response.ok) {
+        // Store token and redirect to connected devices page
+        localStorage.setItem('token', result.token);
+        window.location.href = '/connected-devices';
+      } else {
+        alert(result.message || 'An error occurred');
+      }
+    } catch (error) {
+      console.error('Error:', error);
+      alert('An error occurred');
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-b from-blue-100 to-white flex flex-col items-center justify-center p-4">
+      <header className="mb-8 text-center">
+        <Wifi className="h-12 w-12 text-blue-600 mx-auto mb-2" />
+        <h1 className="text-3xl font-bold text-blue-800">My Wi-Fi Network Manager</h1>
+      </header>
+
+      <div className="w-full max-w-md">
+        <div className="grid grid-cols-2 mb-4">
+          <button
+            className={`py-2 ${isLogin ? 'border-b-2 border-blue-600' : ''}`}
+            onClick={() => setIsLogin(true)}
+          >
+            Login
+          </button>
+          <button
+            className={`py-2 ${!isLogin ? 'border-b-2 border-blue-600' : ''}`}
+            onClick={() => setIsLogin(false)}
+          >
+            Register
+          </button>
+        </div>
+
+        {isLogin ? (
+          <form onSubmit={handleSubmit}>
+            <div className="space-y-4">
+              <div>
+                <label htmlFor="email">Email</label>
+                <input id="email" name="email" type="email" required className="w-full" />
+              </div>
+              <div>
+                <label htmlFor="password">Password</label>
+                <input id="password" name="password" type="password" required className="w-full" />
+              </div>
+              <button type="submit" className="w-full bg-blue-600 text-white py-2">
+                Login
+              </button>
+            </div>
+          </form>
+        ) : (
+          <form onSubmit={handleSubmit}>
+            <div className="space-y-4">
+              <div>
+                <label htmlFor="username">Name</label>
+                <input id="username" name="username" type="text" required className="w-full" />
+              </div>
+              <div>
+                <label htmlFor="email">Email</label>
+                <input id="email" name="email" type="email" required className="w-full" />
+              </div>
+              <div>
+                <label htmlFor="password">Password</label>
+                <input id="password" name="password" type="password" required className="w-full" />
+              </div>
+              <div>
+                <label htmlFor="confirmPassword">Confirm Password</label>
+                <input
+                  id="confirmPassword"
+                  name="confirmPassword"
+                  type="password"
+                  required
+                  className="w-full"
+                />
+              </div>
+              <button type="submit" className="w-full bg-blue-600 text-white py-2">
+                Register
+              </button>
+            </div>
+          </form>
+        )}
+      </div>
+    </div>
+  );
+}
+```
+
+**Note:** You may need to adjust the styling and component imports based on your preferred UI library or CSS framework.
+
+---
+
+#### **2.4. `src/components/ConnectedDevices.jsx`**
+
+**Description:**
+
+- Displays a list of connected devices.
+- Allows users to block or unblock devices.
+
+**Code:**
+
+```jsx
+// src/components/ConnectedDevices.jsx
+import React, { useState, useEffect } from 'react';
+import { Search, Wifi, WifiOff, AlertCircle, RefreshCw } from 'lucide-react';
+
+export default function ConnectedDevices() {
+  const [devices, setDevices] = useState([]);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  const fetchDevices = async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const response = await fetch('/api/devices', {
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+        },
+      });
+      const data = await response.json();
+      if (response.ok) {
+        setDevices(data);
+      } else {
+        setError(data.message || 'Failed to fetch devices');
+        if (response.status === 401) {
+          // Token invalid or expired
+          localStorage.removeItem('token');
+          window.location.href = '/login';
+        }
+      }
+    } catch (err) {
+      setError('Error fetching devices. Please try again later.');
+      console.error('Error fetching devices:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchDevices();
+  }, []);
+
+  const filteredDevices = devices.filter(
+    (device) =>
+      device.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      device.ip_address.includes(searchTerm) ||
+      device.mac_address.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  const handleBlockToggle = async (id, blocked) => {
+    try {
+      const response = await fetch(`/api/devices/${id}/block`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+        },
+        body: JSON.stringify({ blocked: !blocked }),
+      });
+      const data = await response.json();
+      if (response.ok) {
+        // Update the device status in the state
+        setDevices((prevDevices) =>
+          prevDevices.map((device) =>
+            device.id === id ? { ...device, blocked: !blocked } : device
+          )
+        );
+      } else {
+        alert(data.message || 'Failed to update device status');
+      }
+    } catch (error) {
+      console.error('Error updating device status:', error);
+      alert('An error occurred');
+    }
+  };
+
+  if (isLoading) {
+    return (
+      <div className="w-full max-w-4xl mx-auto mt-8">
+        <div className="flex items-center justify-center h-64">
+          <RefreshCw className="h-8 w-8 animate-spin text-primary" />
+          <span className="ml-2 text-lg font-medium">Loading devices...</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="w-full max-w-4xl mx-auto mt-8">
+        <div className="py-6">
+          <div className="flex items-center text-red-600">
+            <AlertCircle className="h-6 w-6" />
+            <span className="ml-2 font-medium">Error: {error}</span>
+          </div>
+          <button onClick={fetchDevices} className="mt-4 px-4 py-2 border">
+            <RefreshCw className="h-4 w-4 mr-2 inline" />
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="w-full max-w-4xl mx-auto mt-8">
+      <div>
+        <h2 className="text-2xl font-bold">Connected Devices</h2>
+      </div>
+      <div className="mb-4 relative">
+        <Search className="absolute left-2 top-2.5 h-4 w-4 text-gray-500" />
+        <input
+          type="text"
+          placeholder="Search by name, IP, or MAC address"
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          className="pl-8 w-full border rounded py-2"
+        />
+      </div>
+
+      <table className="w-full table-auto border-collapse">
+        <thead>
+          <tr>
+            <th className="border px-4 py-2">Device Name</th>
+            <th className="border px-4 py-2">IP Address</th>
+            <th className="border px-4 py-2">MAC Address</th>
+            <th className="border px-4 py-2">Status</th>
+            <th className="border px-4 py-2">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {filteredDevices.map((device) => (
+            <tr key={device.id}>
+              <td className="border px-4 py-2">{device.name}</td>
+              <td className="border px-4 py-2">{device.ip_address}</td>
+              <td className="border px-4 py-2">{device.mac_address}</td>
+              <td className="border px-4 py-2">
+                {device.status ? (
+                  <span className="flex items-center text-green-500">
+                    <Wifi className="h-4 w-4 mr-1" />
+                    Online
+                  </span>
+                ) : (
+                  <span className="flex items-center text-red-500">
+                    <WifiOff className="h-4 w-4 mr-1" />
+                    Offline
+                  </span>
+                )}
+              </td>
+              <td className="border px-4 py-2">
+                <button
+                  className={`px-2 py-1 ${device.blocked ? 'bg-red-600 text-white' : 'bg-gray-200'}`}
+                  onClick={() => handleBlockToggle(device.id, device.blocked)}
+                >
+                  {device.blocked ? 'Unblock' : 'Block'}
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+```
+
+**Note:** Adjust the styling and component imports based on your preferred UI library or CSS framework.
+
+---
+
+### **3. Frontend Build Configuration**
+
+#### **3.1. `package.json`**
+
+**Description:**
+
+- Manages Node.js dependencies and scripts for the frontend build process.
+
+**Content:**
+
+```json
+{
+  "name": "wifi-network-manager",
+  "version": "1.0.0",
+  "description": "Wi-Fi Network Manager Application",
+  "main": "index.js",
+  "scripts": {
+    "build": "webpack --mode production",
+    "start": "webpack serve --mode development --open"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.14.1",
+    "lucide-react": "^0.162.0"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.22.5",
+    "@babel/preset-env": "^7.22.5",
+    "@babel/preset-react": "^7.22.5",
+    "babel-loader": "^9.1.3",
+    "webpack": "^5.88.2",
+    "webpack-cli": "^5.1.4",
+    "webpack-dev-server": "^4.15.1",
+    "css-loader": "^6.8.1",
+    "style-loader": "^3.3.3"
+  },
+  "author": "",
+  "license": "ISC"
+}
+```
+
+---
+
+#### **3.2. `webpack.config.js`**
+
+**Description:**
+
+- Configures Webpack to bundle the React application.
+
+**Code:**
+
+```javascript
+// webpack.config.js
+const path = require('path');
+
+module.exports = {
+  entry: './src/index.jsx',
+  output: {
+    path: path.resolve(__dirname, 'static/js/dist'),
+    filename: 'bundle.min.js',
+    publicPath: '/static/js/dist/',
+  },
+  module: {
+    rules: [
+      {
+        test: /\.(js|jsx)$/,
+        exclude: /node_modules/,
+        use: ['babel-loader'],
+      },
+      // Load CSS files
+      {
+        test: /\.css$/,
+        use: ['style-loader', 'css-loader'],
+      },
+      // Load images and fonts if needed
+    ],
+  },
+  resolve: {
+    extensions: ['*', '.js', '.jsx'],
+  },
+};
+```
+
+---
+
+#### **3.3. `.babelrc`**
+
+**Description:**
+
+- Configures Babel to transpile modern JavaScript and JSX.
+
+**Content:**
+
+```json
+{
+  "presets": ["@babel/preset-env", "@babel/preset-react"]
+}
+```
+
+---
+
+### **4. Template and Static Files**
+
+#### **4.1. `templates/index.html`**
+
+**Description:**
+
+- The HTML template served by Flask.
+- Contains a div with `id="root"` where the React app is mounted.
+- References the bundled JavaScript file.
+
+**Code:**
+
+```html
+<!-- templates/index.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Wi-Fi Network Manager</title>
+  <!-- Include any global stylesheets or fonts here -->
+</head>
+<body>
+  <div id="root"></div>
+  <script src="/static/js/dist/bundle.min.js"></script>
+</body>
+</html>
+```
+
+---
+
+#### **4.2. `static/css/custom.css`**
+
+**Description:**
+
+- Contains custom CSS styles for your application.
+- Optional if you're using a CSS framework or inline styles.
+
+**Code:**
+
+```css
+/* static/css/custom.css */
+/* Add your custom styles here */
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+}
+```
+
+---
+
+### **5. Setting Up the Application**
+
+#### **5.1. Backend Setup**
+
+1. **Create a Virtual Environment:**
+
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # On Windows, use venv\Scripts\activate
+   ```
+
+2. **Install Python Dependencies:**
+
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. **Initialize the Database:**
+
+   - **Set up Flask-Migrate:**
+
+     ```bash
+     flask db init
+     flask db migrate -m "Initial migration."
+     flask db upgrade
+     ```
+
+     Ensure you have `FLASK_APP` environment variable set:
+
+     ```bash
+     export FLASK_APP=app.py  # On Windows: set FLASK_APP=app.py
+     ```
+
+#### **5.2. Frontend Setup**
+
+1. **Install Node.js Dependencies:**
+
+   ```bash
+   npm install
+   ```
+
+2. **Build the React Application:**
+
+   ```bash
+   npm run build
+   ```
+
+   This will generate the `bundle.min.js` file in `static/js/dist/`.
+
+#### **5.3. Running the Application**
+
+1. **Start the Flask Server:**
+
+   ```bash
+   flask run
+   ```
+
+   The application should now be running at `http://localhost:5000`.
+
+---
+
+### **6. Testing the Application**
+
+1. **Access the Application:**
+
+   Open a web browser and navigate to `http://localhost:5000`.
+
+2. **Register a New User:**
+
+   - Click on the "Register" tab.
+   - Fill out the registration form.
+   - Submit the form.
+
+3. **Login:**
+
+   - After registration, you may be redirected to the login page.
+   - Log in with your new credentials.
+
+4. **View Connected Devices:**
+
+   - Once logged in, you should see the connected devices page.
+   - Since `network_scanner.py` has a placeholder function, the device list may be empty unless you implement actual scanning logic.
+
+5. **Block/Unblock Devices:**
+
+   - Use the "Block" or "Unblock" buttons to change the status of devices.
+   - Observe that the device's status updates accordingly.
+
+---
+
+### **7. Conclusion**
+
+You've now built the Wi-Fi Network Manager application from scratch, with a clear understanding of each file and its role in the project. You can further enhance the application by:
+
+- Implementing the actual network scanning logic in `network_scanner.py`.
+- Adding more features to the frontend, such as charts for network analytics.
+- Improving the UI with a component library or custom styles.
+- Securing the application by enforcing HTTPS and adding rate limiting.
+
+---
+
+**Let me know if you have any questions or need further assistance with any part of the setup!**

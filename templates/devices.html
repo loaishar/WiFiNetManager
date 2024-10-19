@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h2>Connected Devices</h2>
+<button id="scan-button" class="btn btn-primary mb-3">Scan for new devices</button>
+<table class="table table-striped">
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>IP Address</th>
+            <th>MAC Address</th>
+            <th>Status</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody id="device-list">
+        <!-- Device list will be populated by JavaScript -->
+    </tbody>
+</table>
+{% endblock %}

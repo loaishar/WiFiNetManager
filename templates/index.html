@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1>Welcome to Wi-Fi Network Manager</h1>
+<p>Manage your network devices with ease.</p>
+<a href="{{ url_for('login') }}" class="btn btn-primary">Login</a>
+<a href="{{ url_for('register') }}" class="btn btn-secondary">Register</a>
+{% endblock %}

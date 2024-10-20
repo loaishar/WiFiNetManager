@@ -1,109 +1,139 @@
 from flask import render_template, request, jsonify, redirect, url_for, flash
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, set_access_cookies
-from app import app, db, jwt
+from app import app, db
 from models import User, Device
 from network_scanner import scan_network
 import logging
+from datetime import datetime
 
 logging.basicConfig(level=logging.DEBUG)
 
 @app.route('/')
 def index():
+    logging.info("Accessing index route")
     return render_template('index.html')
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
+    logging.info("Accessing register route")
     if request.method == 'POST':
         username = request.form['username']
         email = request.form['email']
         password = request.form['password']
 
-        user = User(username=username, email=email)
-        user.set_password(password)
-        db.session.add(user)
-        db.session.commit()
-
-        return redirect(url_for('login'))
+        try:
+            user = User(username=username, email=email)
+            user.set_password(password)
+            db.session.add(user)
+            db.session.commit()
+            logging.info(f"User {username} registered successfully")
+            return redirect(url_for('login'))
+        except Exception as e:
+            logging.error(f"Error during registration: {str(e)}")
+            db.session.rollback()
+            flash('Registration failed. Please try again.', 'error')
 
     return render_template('register.html')
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
-    logging.debug("Entering login route")
+    logging.info("Accessing login route")
     if request.method == 'POST':
-        logging.debug("Processing POST request for login")
         username = request.form['username']
         password = request.form['password']
-        logging.debug(f"Attempting login for user: {username}")
 
         user = User.query.filter_by(username=username).first()
         if user and user.check_password(password):
-            logging.debug("User authenticated successfully")
             access_token = create_access_token(identity=user.id)
-            logging.debug(f"Access token created: {access_token[:10]}...")
             response = redirect(url_for('devices'))
             set_access_cookies(response, access_token)
-            logging.debug("Access token set in cookies")
-            logging.debug(f"Redirecting to: {response.location}")
+            logging.info(f"User {username} logged in successfully")
             return response
         else:
-            logging.debug("Authentication failed")
+            logging.warning(f"Failed login attempt for user {username}")
             flash('Invalid username or password', 'error')
 
-    logging.debug("Rendering login template")
     return render_template('login.html')
 
 @app.route('/devices')
 @jwt_required()
 def devices():
-    logging.debug("Accessing /devices route")
+    logging.info("Accessing devices route")
     current_user_id = get_jwt_identity()
-    logging.debug(f"Current user ID: {current_user_id}")
     return render_template('devices.html')
 
 @app.route('/api/devices', methods=['GET'])
 @jwt_required()
 def get_devices():
-    logging.debug("Accessing /api/devices route")
-    current_user_id = get_jwt_identity()
-    logging.debug(f"Current user ID: {current_user_id}")
-    devices = Device.query.all()
-    return jsonify([{
-        'id': device.id,
-        'name': device.name,
-        'ip_address': device.ip_address,
-        'mac_address': device.mac_address,
-        'status': device.status,
-        'blocked': device.blocked
-    } for device in devices])
+    logging.info("Fetching devices")
+    try:
+        devices = Device.query.all()
+        return jsonify([{
+            'id': device.id,
+            'name': device.name,
+            'ip_address': device.ip_address,
+            'mac_address': device.mac_address,
+            'status': device.status,
+            'blocked': device.blocked,
+            'last_seen': device.last_seen.isoformat() if device.last_seen else None
+        } for device in devices])
+    except Exception as e:
+        logging.error(f"Error fetching devices: {str(e)}")
+        return jsonify({'error': 'Internal server error'}), 500
 
 @app.route('/api/devices/<int:device_id>/toggle', methods=['POST'])
 @jwt_required()
 def toggle_device(device_id):
-    device = Device.query.get_or_404(device_id)
-    device.blocked = not device.blocked
-    db.session.commit()
-    return jsonify({'success': True, 'blocked': device.blocked})
+    logging.info(f"Toggling device with ID: {device_id}")
+    try:
+        device = Device.query.get_or_404(device_id)
+        device.blocked = not device.blocked
+        db.session.commit()
+        return jsonify({'success': True, 'blocked': device.blocked})
+    except Exception as e:
+        logging.error(f"Error toggling device {device_id}: {str(e)}")
+        db.session.rollback()
+        return jsonify({'error': 'Internal server error'}), 500
 
 @app.route('/api/scan', methods=['POST'])
 @jwt_required()
 def scan():
-    new_devices = scan_network()
-    for device in new_devices:
-        existing_device = Device.query.filter_by(mac_address=device['mac_address']).first()
-        if not existing_device:
-            new_device = Device(**device)
-            db.session.add(new_device)
-    db.session.commit()
-    return jsonify({'success': True})
+    logging.info("Scanning for new devices")
+    try:
+        new_devices = scan_network()
+        for device_data in new_devices:
+            existing_device = Device.query.filter_by(mac_address=device_data['mac_address']).first()
+            if existing_device:
+                existing_device.name = device_data['name']
+                existing_device.ip_address = device_data['ip_address']
+                existing_device.status = device_data['status']
+                existing_device.last_seen = device_data['last_seen']
+            else:
+                new_device = Device(**device_data)
+                db.session.add(new_device)
+        db.session.commit()
+        logging.info(f"Scan completed, {len(new_devices)} devices processed")
+        return jsonify({'success': True})
+    except Exception as e:
+        logging.error(f"Error during device scan: {str(e)}")
+        db.session.rollback()
+        return jsonify({'error': 'Internal server error'}), 500
 
 @app.route('/logout')
 def logout():
+    logging.info("User logged out")
     response = redirect(url_for('login'))
-    jwt.unset_jwt_cookies(response)
+    # Unset JWT cookies
+    response.delete_cookie('access_token_cookie')
     return response
 
-@app.errorhandler(Exception)
-def handle_error(e):
-    logging.error(f"An error occurred: {str(e)}")
-    return jsonify(error=str(e)), 500
+@app.errorhandler(404)
+def not_found_error(error):
+    logging.error(f"404 error: {error}")
+    return render_template('404.html'), 404
+
+@app.errorhandler(500)
+def internal_error(error):
+    logging.error(f"500 error: {error}")
+    db.session.rollback()
+    return render_template('500.html'), 500

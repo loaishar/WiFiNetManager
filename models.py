@@ -1,5 +1,6 @@
 from app import db
 from werkzeug.security import generate_password_hash, check_password_hash
+from datetime import datetime
 
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -15,8 +16,9 @@ class User(db.Model):
 
 class Device(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(64), nullable=False)
-    ip_address = db.Column(db.String(15), nullable=False)
-    mac_address = db.Column(db.String(17), nullable=False)
+    name = db.Column(db.String(128), nullable=False)
+    ip_address = db.Column(db.String(45), nullable=False, index=True)
+    mac_address = db.Column(db.String(17), unique=True, nullable=False, index=True)
     status = db.Column(db.Boolean, default=True)
     blocked = db.Column(db.Boolean, default=False)
+    last_seen = db.Column(db.DateTime, default=datetime.utcnow)

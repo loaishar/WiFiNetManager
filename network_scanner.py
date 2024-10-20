@@ -1,16 +1,30 @@
 import random
+from datetime import datetime, timedelta
+
+def generate_mac_address():
+    """Generate a random MAC address."""
+    return ':'.join(['{:02x}'.format(random.randint(0x00, 0xff)) for _ in range(6)])
+
+def generate_ip_address():
+    """Generate a random IP address within a private IP range."""
+    return f"192.168.1.{random.randint(2, 254)}"
+
+def generate_device_name():
+    """Generate a random device name."""
+    device_types = ['Laptop', 'Smartphone', 'Tablet', 'Smart TV', 'Printer', 'Camera']
+    return f"{random.choice(device_types)}-{random.randint(1000, 9999)}"
 
 def scan_network():
-    # Placeholder function for network scanning
-    # In a real implementation, this would use a library like scapy to scan the network
+    """Simulate network scanning by generating a list of devices."""
     devices = []
-    for i in range(5):
+    for _ in range(random.randint(5, 15)):
         device = {
-            'name': f'Device {i+1}',
-            'ip_address': f'192.168.1.{random.randint(2, 254)}',
-            'mac_address': ':'.join(['{:02x}'.format(random.randint(0, 255)) for _ in range(6)]),
-            'status': True,
-            'blocked': False
+            'name': generate_device_name(),
+            'ip_address': generate_ip_address(),
+            'mac_address': generate_mac_address(),
+            'status': random.choice([True, False]),
+            'blocked': False,
+            'last_seen': datetime.utcnow() - timedelta(minutes=random.randint(0, 60))
         }
         devices.append(device)
     return devices

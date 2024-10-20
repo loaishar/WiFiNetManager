@@ -1,5 +1,5 @@
 import os
-from flask import Flask
+from flask import Flask, render_template
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.orm import DeclarativeBase
 from flask_jwt_extended import JWTManager, verify_jwt_in_request, get_jwt_identity
@@ -12,7 +12,11 @@ db = SQLAlchemy(model_class=Base)
 app = Flask(__name__)
 
 # Setup logging
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
 
 # Setup secret key and database
 app.secret_key = os.environ.get("FLASK_SECRET_KEY") or "a secret key"
@@ -44,8 +48,19 @@ def inject_logged_in():
         user_id = get_jwt_identity()
         return {'logged_in': bool(user_id)}
     except Exception as e:
-        logging.error(f"Error in context processor: {str(e)}")
+        app.logger.error(f"Error in context processor: {str(e)}")
         return {'logged_in': False}
+
+@app.errorhandler(404)
+def not_found_error(error):
+    app.logger.error(f"404 error: {error}")
+    return render_template('404.html'), 404
+
+@app.errorhandler(500)
+def internal_error(error):
+    app.logger.error(f"500 error: {error}")
+    db.session.rollback()
+    return render_template('500.html'), 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)

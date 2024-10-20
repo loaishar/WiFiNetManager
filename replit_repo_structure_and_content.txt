@@ -8,46 +8,6 @@ File: ./generated-icon.png
 Could not read file: ./generated-icon.png. Error: 'utf-8' codec can't decode byte 0x89 in position 0: invalid start byte
 --------------------------------------------------
 
-File: ./app.py
---------------------------------------------------
-Contents of ./app.py:
-import os
-from flask import Flask
-from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy.orm import DeclarativeBase
-from flask_jwt_extended import JWTManager
-
-class Base(DeclarativeBase):
-    pass
-
-db = SQLAlchemy(model_class=Base)
-app = Flask(__name__)
-
-# Setup secret key and database
-app.secret_key = os.environ.get("FLASK_SECRET_KEY") or "a secret key"
-app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get("DATABASE_URL")
-app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
-    "pool_recycle": 300,
-    "pool_pre_ping": True,
-}
-
-# Setup JWT
-app.config["JWT_SECRET_KEY"] = os.environ.get("FLASK_SECRET_KEY") or "jwt secret key"
-jwt = JWTManager(app)
-
-db.init_app(app)
-
-with app.app_context():
-    import models
-    db.create_all()
-
-from routes import *
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
-
---------------------------------------------------
-
 File: ./main.py
 --------------------------------------------------
 Contents of ./main.py:
@@ -83,90 +43,6 @@ class Device(db.Model):
     mac_address = db.Column(db.String(17), nullable=False)
     status = db.Column(db.Boolean, default=True)
     blocked = db.Column(db.Boolean, default=False)
-
---------------------------------------------------
-
-File: ./routes.py
---------------------------------------------------
-Contents of ./routes.py:
-from flask import render_template, request, jsonify, redirect, url_for
-from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
-from app import app, db
-from models import User, Device
-from network_scanner import scan_network
-
-@app.route('/')
-def index():
-    return render_template('index.html')
-
-@app.route('/register', methods=['GET', 'POST'])
-def register():
-    if request.method == 'POST':
-        username = request.form['username']
-        email = request.form['email']
-        password = request.form['password']
-
-        user = User(username=username, email=email)
-        user.set_password(password)
-        db.session.add(user)
-        db.session.commit()
-
-        return redirect(url_for('login'))
-
-    return render_template('register.html')
-
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    if request.method == 'POST':
-        username = request.form['username']
-        password = request.form['password']
-
-        user = User.query.filter_by(username=username).first()
-        if user and user.check_password(password):
-            access_token = create_access_token(identity=user.id)
-            return jsonify(access_token=access_token), 200
-
-    return render_template('login.html')
-
-@app.route('/devices')
-@jwt_required()
-def devices():
-    current_user_id = get_jwt_identity()
-    devices = Device.query.all()
-    return render_template('devices.html', devices=devices)
-
-@app.route('/api/devices', methods=['GET'])
-@jwt_required()
-def get_devices():
-    devices = Device.query.all()
-    return jsonify([{
-        'id': device.id,
-        'name': device.name,
-        'ip_address': device.ip_address,
-        'mac_address': device.mac_address,
-        'status': device.status,
-        'blocked': device.blocked
-    } for device in devices])
-
-@app.route('/api/devices/<int:device_id>/toggle', methods=['POST'])
-@jwt_required()
-def toggle_device(device_id):
-    device = Device.query.get_or_404(device_id)
-    device.blocked = not device.blocked
-    db.session.commit()
-    return jsonify({'success': True, 'blocked': device.blocked})
-
-@app.route('/api/scan', methods=['POST'])
-@jwt_required()
-def scan():
-    new_devices = scan_network()
-    for device in new_devices:
-        existing_device = Device.query.filter_by(mac_address=device['mac_address']).first()
-        if not existing_device:
-            new_device = Device(**device)
-            db.session.add(new_device)
-    db.session.commit()
-    return jsonify({'success': True})
 
 --------------------------------------------------
 
@@ -249,6 +125,178 @@ if __name__ == "__main__":
 
 --------------------------------------------------
 
+File: ./routes.py
+--------------------------------------------------
+Contents of ./routes.py:
+from flask import render_template, request, jsonify, redirect, url_for, flash
+from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, set_access_cookies
+from app import app, db, jwt
+from models import User, Device
+from network_scanner import scan_network
+import logging
+
+logging.basicConfig(level=logging.DEBUG)
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    if request.method == 'POST':
+        username = request.form['username']
+        email = request.form['email']
+        password = request.form['password']
+
+        user = User(username=username, email=email)
+        user.set_password(password)
+        db.session.add(user)
+        db.session.commit()
+
+        return redirect(url_for('login'))
+
+    return render_template('register.html')
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    logging.debug("Entering login route")
+    if request.method == 'POST':
+        logging.debug("Processing POST request for login")
+        username = request.form['username']
+        password = request.form['password']
+        logging.debug(f"Attempting login for user: {username}")
+
+        user = User.query.filter_by(username=username).first()
+        if user and user.check_password(password):
+            logging.debug("User authenticated successfully")
+            access_token = create_access_token(identity=user.id)
+            logging.debug(f"Access token created: {access_token[:10]}...")
+            response = redirect(url_for('devices'))
+            set_access_cookies(response, access_token)
+            logging.debug("Access token set in cookies")
+            logging.debug(f"Redirecting to: {response.location}")
+            return response
+        else:
+            logging.debug("Authentication failed")
+            flash('Invalid username or password', 'error')
+
+    logging.debug("Rendering login template")
+    return render_template('login.html')
+
+@app.route('/devices')
+@jwt_required()
+def devices():
+    logging.debug("Accessing /devices route")
+    current_user_id = get_jwt_identity()
+    logging.debug(f"Current user ID: {current_user_id}")
+    return render_template('devices.html')
+
+@app.route('/api/devices', methods=['GET'])
+@jwt_required()
+def get_devices():
+    logging.debug("Accessing /api/devices route")
+    current_user_id = get_jwt_identity()
+    logging.debug(f"Current user ID: {current_user_id}")
+    devices = Device.query.all()
+    return jsonify([{
+        'id': device.id,
+        'name': device.name,
+        'ip_address': device.ip_address,
+        'mac_address': device.mac_address,
+        'status': device.status,
+        'blocked': device.blocked
+    } for device in devices])
+
+@app.route('/api/devices/<int:device_id>/toggle', methods=['POST'])
+@jwt_required()
+def toggle_device(device_id):
+    device = Device.query.get_or_404(device_id)
+    device.blocked = not device.blocked
+    db.session.commit()
+    return jsonify({'success': True, 'blocked': device.blocked})
+
+@app.route('/api/scan', methods=['POST'])
+@jwt_required()
+def scan():
+    new_devices = scan_network()
+    for device in new_devices:
+        existing_device = Device.query.filter_by(mac_address=device['mac_address']).first()
+        if not existing_device:
+            new_device = Device(**device)
+            db.session.add(new_device)
+    db.session.commit()
+    return jsonify({'success': True})
+
+@app.route('/logout')
+def logout():
+    response = redirect(url_for('login'))
+    jwt.unset_jwt_cookies(response)
+    return response
+
+@app.errorhandler(Exception)
+def handle_error(e):
+    logging.error(f"An error occurred: {str(e)}")
+    return jsonify(error=str(e)), 500
+
+--------------------------------------------------
+
+File: ./app.py
+--------------------------------------------------
+Contents of ./app.py:
+import os
+from flask import Flask
+from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy.orm import DeclarativeBase
+from flask_jwt_extended import JWTManager, verify_jwt_in_request, get_jwt_identity
+import logging
+
+class Base(DeclarativeBase):
+    pass
+
+db = SQLAlchemy(model_class=Base)
+app = Flask(__name__)
+
+# Setup logging
+logging.basicConfig(level=logging.DEBUG)
+
+# Setup secret key and database
+app.secret_key = os.environ.get("FLASK_SECRET_KEY") or "a secret key"
+app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get("DATABASE_URL")
+app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
+    "pool_recycle": 300,
+    "pool_pre_ping": True,
+}
+
+# Setup JWT
+app.config["JWT_SECRET_KEY"] = os.environ.get("FLASK_SECRET_KEY") or "jwt secret key"
+app.config["JWT_TOKEN_LOCATION"] = ["cookies"]
+app.config["JWT_COOKIE_SECURE"] = False  # Set to True in production with HTTPS
+app.config["JWT_COOKIE_CSRF_PROTECT"] = False  # Set to True and implement CSRF protection in production
+jwt = JWTManager(app)
+
+db.init_app(app)
+
+with app.app_context():
+    import models
+    db.create_all()
+
+from routes import *
+
+@app.context_processor
+def inject_logged_in():
+    try:
+        verify_jwt_in_request(optional=True)
+        user_id = get_jwt_identity()
+        return {'logged_in': bool(user_id)}
+    except Exception as e:
+        logging.error(f"Error in context processor: {str(e)}")
+        return {'logged_in': False}
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
+
+--------------------------------------------------
+
 Directory: ./static/
 --------------------------------------------------
 File: ./static/css/custom.css
@@ -262,72 +310,23 @@ File: ./static/js/main.js
 --------------------------------------------------
 Contents of ./static/js/main.js:
 document.addEventListener('DOMContentLoaded', function() {
-    const loginForm = document.getElementById('login-form');
     const deviceList = document.getElementById('device-list');
     const scanButton = document.getElementById('scan-button');
 
     console.log('DOM Content Loaded');
 
-    if (loginForm) {
-        loginForm.addEventListener('submit', function(e) {
-            e.preventDefault();
-            const username = document.getElementById('username').value;
-            const password = document.getElementById('password').value;
-
-            fetch('/login', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                },
-                body: new URLSearchParams({
-                    'username': username,
-                    'password': password
-                })
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.access_token) {
-                    console.log('Login successful, storing token');
-                    localStorage.setItem('access_token', data.access_token);
-                    // Confirm token is set before redirecting
-                    const storedToken = localStorage.getItem('access_token');
-                    console.log('Stored token:', storedToken);
-                    if (storedToken) {
-                        console.log('Token stored successfully, redirecting to /devices');
-                        window.location.href = '/devices';
-                    } else {
-                        throw new Error('Failed to store access token');
-                    }
-                } else {
-                    throw new Error(data.message || 'Login failed');
-                }
-            })
-            .catch(error => {
-                console.error('Error:', error);
-                alert(error.message || 'An error occurred during login. Please try again.');
-            });
-        });
-    }
-
-    function getAuthHeader() {
-        const token = localStorage.getItem('access_token');
-        console.log('Retrieved token for auth header:', token);
-        return token ? { 'Authorization': `Bearer ${token}` } : {};
-    }
-
     function handleUnauthorized() {
-        console.log('Unauthorized access, clearing token and redirecting to login');
-        localStorage.removeItem('access_token');
+        console.log('Unauthorized access, redirecting to login');
         window.location.href = '/login';
     }
 
     if (deviceList) {
         console.log('Device list found, loading devices');
+
         function loadDevices() {
-            const headers = getAuthHeader();
-            console.log('Headers for /api/devices request:', headers);
             fetch('/api/devices', {
-                headers: headers
+                method: 'GET',
+                credentials: 'same-origin'
             })
             .then(response => {
                 console.log('Response status:', response.status);
@@ -367,11 +366,9 @@ document.addEventListener('DOMContentLoaded', function() {
         loadDevices();
 
         window.toggleDevice = function(deviceId) {
-            const headers = getAuthHeader();
-            console.log('Headers for toggle device request:', headers);
             fetch(`/api/devices/${deviceId}/toggle`, {
                 method: 'POST',
-                headers: headers
+                credentials: 'same-origin'
             })
             .then(response => {
                 console.log('Toggle device response status:', response.status);
@@ -397,11 +394,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
         if (scanButton) {
             scanButton.addEventListener('click', function() {
-                const headers = getAuthHeader();
-                console.log('Headers for scan request:', headers);
                 fetch('/api/scan', {
                     method: 'POST',
-                    headers: headers
+                    credentials: 'same-origin'
                 })
                 .then(response => {
                     console.log('Scan response status:', response.status);
@@ -489,28 +484,6 @@ Contents of ./templates/index.html:
 
 --------------------------------------------------
 
-File: ./templates/login.html
---------------------------------------------------
-Contents of ./templates/login.html:
-{% extends "base.html" %}
-
-{% block content %}
-<h2>Login</h2>
-<form id="login-form">
-    <div class="mb-3">
-        <label for="username" class="form-label">Username</label>
-        <input type="text" class="form-control" id="username" name="username" required>
-    </div>
-    <div class="mb-3">
-        <label for="password" class="form-label">Password</label>
-        <input type="password" class="form-control" id="password" name="password" required>
-    </div>
-    <button type="submit" class="btn btn-primary">Login</button>
-</form>
-{% endblock %}
-
---------------------------------------------------
-
 File: ./templates/register.html
 --------------------------------------------------
 Contents of ./templates/register.html:
@@ -559,6 +532,35 @@ Contents of ./templates/devices.html:
         <!-- Device list will be populated by JavaScript -->
     </tbody>
 </table>
+{% endblock %}
+
+--------------------------------------------------
+
+File: ./templates/login.html
+--------------------------------------------------
+Contents of ./templates/login.html:
+{% extends "base.html" %}
+
+{% block content %}
+<h2>Login</h2>
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}
+    {% for category, message in messages %}
+      <div class="alert alert-{{ category }}">{{ message }}</div>
+    {% endfor %}
+  {% endif %}
+{% endwith %}
+<form action="{{ url_for('login') }}" method="post">
+    <div class="mb-3">
+        <label for="username" class="form-label">Username</label>
+        <input type="text" class="form-control" id="username" name="username" required>
+    </div>
+    <div class="mb-3">
+        <label for="password" class="form-label">Password</label>
+        <input type="password" class="form-control" id="password" name="password" required>
+    </div>
+    <button type="submit" class="btn btn-primary">Login</button>
+</form>
 {% endblock %}
 
 --------------------------------------------------

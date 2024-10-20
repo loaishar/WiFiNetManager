@@ -13,7 +13,6 @@ class Base(DeclarativeBase):
 db = SQLAlchemy(model_class=Base)
 app = Flask(__name__)
 migrate = Migrate(app, db)
-socketio = SocketIO(app, cors_allowed_origins="*")
 
 # Setup logging
 logging.basicConfig(
@@ -38,6 +37,9 @@ app.config["JWT_COOKIE_CSRF_PROTECT"] = False  # Set to True and implement CSRF 
 jwt = JWTManager(app)
 
 db.init_app(app)
+
+# Initialize SocketIO with CORS allowed
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
 
 with app.app_context():
     import models
@@ -65,6 +67,10 @@ def internal_error(error):
     app.logger.error(f"500 error: {error}")
     db.session.rollback()
     return render_template('500.html'), 500
+
+@socketio.on_error()
+def error_handler(e):
+    app.logger.error(f"SocketIO error: {str(e)}")
 
 if __name__ == "__main__":
     socketio.run(app, host="0.0.0.0", port=5000, debug=True)

@@ -91,8 +91,10 @@ def toggle_device(device_id):
         device.blocked = not device.blocked
         db.session.commit()
         
+        logging.info(f"Device {device_id} blocked status changed to {device.blocked}")
+        
         # Emit a WebSocket event to notify clients about the device update
-        socketio.emit('device_update', {
+        device_data = {
             'id': device.id,
             'name': device.name,
             'ip_address': device.ip_address,
@@ -100,7 +102,9 @@ def toggle_device(device_id):
             'status': device.status,
             'blocked': device.blocked,
             'last_seen': device.last_seen.isoformat() if device.last_seen else None
-        })
+        }
+        socketio.emit('device_update', device_data, namespace='/')
+        logging.info(f"Emitted 'device_update' event for device {device_id}")
         
         return jsonify({'success': True, 'blocked': device.blocked})
     except Exception as e:
@@ -138,7 +142,7 @@ def scan():
         
         # Emit a WebSocket event to notify clients about the new scan results
         devices = Device.query.all()
-        socketio.emit('devices_update', [{
+        devices_data = [{
             'id': device.id,
             'name': device.name,
             'ip_address': device.ip_address,
@@ -146,9 +150,10 @@ def scan():
             'status': device.status,
             'blocked': device.blocked,
             'last_seen': device.last_seen.isoformat() if device.last_seen else None
-        } for device in devices])
+        } for device in devices]
+        socketio.emit('devices_update', devices_data, namespace='/')
+        logging.info(f"Emitted 'devices_update' event with {len(devices)} devices")
         
-        logging.info(f"Scan completed, {len(new_devices)} devices processed")
         return jsonify({'success': True})
     except Exception as e:
         logging.error(f"Error during device scan: {str(e)}")

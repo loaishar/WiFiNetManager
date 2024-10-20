@@ -32,6 +32,10 @@ document.addEventListener('DOMContentLoaded', function() {
             console.log('Devices update received:', devices);
             refreshDeviceList(devices);
         });
+
+        socket.on('connect_error', (error) => {
+            console.error('Socket.IO connection error:', error);
+        });
     }
 
     function handleUnauthorized() {
@@ -60,7 +64,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 </td>
             `;
         } else {
-            loadDevices(); // If the device is not in the list, reload all devices
+            console.log('Device not found in list, reloading all devices');
+            loadDevices();
         }
     }
 

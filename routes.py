@@ -1,8 +1,11 @@
 from flask import render_template, request, jsonify, redirect, url_for
-from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
-from app import app, db
+from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, set_access_cookies
+from app import app, db, jwt
 from models import User, Device
 from network_scanner import scan_network
+import logging
+
+logging.basicConfig(level=logging.DEBUG)
 
 @app.route('/')
 def index():
@@ -33,20 +36,28 @@ def login():
         user = User.query.filter_by(username=username).first()
         if user and user.check_password(password):
             access_token = create_access_token(identity=user.id)
-            return jsonify(access_token=access_token), 200
+            response = redirect(url_for('devices'))
+            set_access_cookies(response, access_token)
+            return response
+
+        return render_template('login.html', error="Invalid username or password")
 
     return render_template('login.html')
 
 @app.route('/devices')
 @jwt_required()
 def devices():
+    logging.debug("Accessing /devices route")
     current_user_id = get_jwt_identity()
-    devices = Device.query.all()
-    return render_template('devices.html', devices=devices)
+    logging.debug(f"Current user ID: {current_user_id}")
+    return render_template('devices.html')
 
 @app.route('/api/devices', methods=['GET'])
 @jwt_required()
 def get_devices():
+    logging.debug("Accessing /api/devices route")
+    current_user_id = get_jwt_identity()
+    logging.debug(f"Current user ID: {current_user_id}")
     devices = Device.query.all()
     return jsonify([{
         'id': device.id,
@@ -76,3 +87,9 @@ def scan():
             db.session.add(new_device)
     db.session.commit()
     return jsonify({'success': True})
+
+@app.route('/logout')
+def logout():
+    response = redirect(url_for('login'))
+    jwt.unset_jwt_cookies(response)
+    return response

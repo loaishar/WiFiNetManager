@@ -20,6 +20,9 @@ app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
 
 # Setup JWT
 app.config["JWT_SECRET_KEY"] = os.environ.get("FLASK_SECRET_KEY") or "jwt secret key"
+app.config["JWT_TOKEN_LOCATION"] = ["cookies"]
+app.config["JWT_COOKIE_SECURE"] = False  # Set to True in production with HTTPS
+app.config["JWT_COOKIE_CSRF_PROTECT"] = False  # Set to True and implement CSRF protection in production
 jwt = JWTManager(app)
 
 db.init_app(app)

@@ -1,0 +1,565 @@
+Replit Repository Structure and File Contents:
+==================================================
+
+Directory: ./
+--------------------------------------------------
+File: ./generated-icon.png
+--------------------------------------------------
+Could not read file: ./generated-icon.png. Error: 'utf-8' codec can't decode byte 0x89 in position 0: invalid start byte
+--------------------------------------------------
+
+File: ./app.py
+--------------------------------------------------
+Contents of ./app.py:
+import os
+from flask import Flask
+from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy.orm import DeclarativeBase
+from flask_jwt_extended import JWTManager
+
+class Base(DeclarativeBase):
+    pass
+
+db = SQLAlchemy(model_class=Base)
+app = Flask(__name__)
+
+# Setup secret key and database
+app.secret_key = os.environ.get("FLASK_SECRET_KEY") or "a secret key"
+app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get("DATABASE_URL")
+app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
+    "pool_recycle": 300,
+    "pool_pre_ping": True,
+}
+
+# Setup JWT
+app.config["JWT_SECRET_KEY"] = os.environ.get("FLASK_SECRET_KEY") or "jwt secret key"
+jwt = JWTManager(app)
+
+db.init_app(app)
+
+with app.app_context():
+    import models
+    db.create_all()
+
+from routes import *
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
+
+--------------------------------------------------
+
+File: ./main.py
+--------------------------------------------------
+Contents of ./main.py:
+from app import app
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
+
+--------------------------------------------------
+
+File: ./models.py
+--------------------------------------------------
+Contents of ./models.py:
+from app import db
+from werkzeug.security import generate_password_hash, check_password_hash
+
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(64), unique=True, nullable=False)
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    password_hash = db.Column(db.String(256))
+
+    def set_password(self, password):
+        self.password_hash = generate_password_hash(password)
+
+    def check_password(self, password):
+        return check_password_hash(self.password_hash, password)
+
+class Device(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(64), nullable=False)
+    ip_address = db.Column(db.String(15), nullable=False)
+    mac_address = db.Column(db.String(17), nullable=False)
+    status = db.Column(db.Boolean, default=True)
+    blocked = db.Column(db.Boolean, default=False)
+
+--------------------------------------------------
+
+File: ./routes.py
+--------------------------------------------------
+Contents of ./routes.py:
+from flask import render_template, request, jsonify, redirect, url_for
+from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
+from app import app, db
+from models import User, Device
+from network_scanner import scan_network
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    if request.method == 'POST':
+        username = request.form['username']
+        email = request.form['email']
+        password = request.form['password']
+
+        user = User(username=username, email=email)
+        user.set_password(password)
+        db.session.add(user)
+        db.session.commit()
+
+        return redirect(url_for('login'))
+
+    return render_template('register.html')
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+
+        user = User.query.filter_by(username=username).first()
+        if user and user.check_password(password):
+            access_token = create_access_token(identity=user.id)
+            return jsonify(access_token=access_token), 200
+
+    return render_template('login.html')
+
+@app.route('/devices')
+@jwt_required()
+def devices():
+    current_user_id = get_jwt_identity()
+    devices = Device.query.all()
+    return render_template('devices.html', devices=devices)
+
+@app.route('/api/devices', methods=['GET'])
+@jwt_required()
+def get_devices():
+    devices = Device.query.all()
+    return jsonify([{
+        'id': device.id,
+        'name': device.name,
+        'ip_address': device.ip_address,
+        'mac_address': device.mac_address,
+        'status': device.status,
+        'blocked': device.blocked
+    } for device in devices])
+
+@app.route('/api/devices/<int:device_id>/toggle', methods=['POST'])
+@jwt_required()
+def toggle_device(device_id):
+    device = Device.query.get_or_404(device_id)
+    device.blocked = not device.blocked
+    db.session.commit()
+    return jsonify({'success': True, 'blocked': device.blocked})
+
+@app.route('/api/scan', methods=['POST'])
+@jwt_required()
+def scan():
+    new_devices = scan_network()
+    for device in new_devices:
+        existing_device = Device.query.filter_by(mac_address=device['mac_address']).first()
+        if not existing_device:
+            new_device = Device(**device)
+            db.session.add(new_device)
+    db.session.commit()
+    return jsonify({'success': True})
+
+--------------------------------------------------
+
+File: ./network_scanner.py
+--------------------------------------------------
+Contents of ./network_scanner.py:
+import random
+
+def scan_network():
+    # Placeholder function for network scanning
+    # In a real implementation, this would use a library like scapy to scan the network
+    devices = []
+    for i in range(5):
+        device = {
+            'name': f'Device {i+1}',
+            'ip_address': f'192.168.1.{random.randint(2, 254)}',
+            'mac_address': ':'.join(['{:02x}'.format(random.randint(0, 255)) for _ in range(6)]),
+            'status': True,
+            'blocked': False
+        }
+        devices.append(device)
+    return devices
+
+--------------------------------------------------
+
+File: ./generate_structure.py
+--------------------------------------------------
+Contents of ./generate_structure.py:
+import os
+
+# Output file
+OUTPUT_FILE = "replit_repo_structure_and_content.txt"
+
+# Folders and files to include (based on your screenshot)
+INCLUDED_ITEMS = {
+    "app.py", "generated-icon.png", "main.py", "models.py", 
+    "network_scanner.py", "routes.py", "static", "templates"
+}
+
+# Function to write repo structure and file contents
+def write_repo_structure():
+    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+        f.write("Replit Repository Structure and File Contents:\n")
+        f.write("=" * 50 + "\n\n")
+
+        # Walk through the directory tree
+        for root, dirs, files in os.walk("."):
+            # Remove the .git directory from the walk
+            dirs[:] = [d for d in dirs if d != ".git"]
+            # Only include folders and files that match the specified items
+            dirs[:] = [d for d in dirs if d in INCLUDED_ITEMS or d in {"css", "js"}]  # Include css, js subdirectories
+            files = [file for file in files if file.endswith(('.py', '.html', '.css', '.js', '.png'))]  # Include relevant file types
+
+            # Write the current directory if it's in the included items
+            if os.path.basename(root) in INCLUDED_ITEMS or root == ".":
+                f.write(f"Directory: {root}/\n")
+                f.write("-" * 50 + "\n")
+
+            # Write each file in the current directory
+            for file in files:
+                file_path = os.path.join(root, file)
+                f.write(f"File: {file_path}\n")
+                f.write("-" * 50 + "\n")
+
+                try:
+                    # Read the contents of the file
+                    with open(file_path, "r", encoding="utf-8") as content_file:
+                        content = content_file.read()
+                        f.write(f"Contents of {file_path}:\n")
+                        f.write(content + "\n")
+                except Exception as e:
+                    f.write(f"Could not read file: {file_path}. Error: {e}\n")
+
+                f.write("-" * 50 + "\n\n")
+
+# Execute the function to document the current repo
+if __name__ == "__main__":
+    write_repo_structure()
+    print(f"Repository structure and content have been written to {OUTPUT_FILE}")
+
+--------------------------------------------------
+
+Directory: ./static/
+--------------------------------------------------
+File: ./static/css/custom.css
+--------------------------------------------------
+Contents of ./static/css/custom.css:
+/* Add any custom styles here if needed */
+
+--------------------------------------------------
+
+File: ./static/js/main.js
+--------------------------------------------------
+Contents of ./static/js/main.js:
+document.addEventListener('DOMContentLoaded', function() {
+    const loginForm = document.getElementById('login-form');
+    const deviceList = document.getElementById('device-list');
+    const scanButton = document.getElementById('scan-button');
+
+    console.log('DOM Content Loaded');
+
+    if (loginForm) {
+        loginForm.addEventListener('submit', function(e) {
+            e.preventDefault();
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+
+            fetch('/login', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: new URLSearchParams({
+                    'username': username,
+                    'password': password
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.access_token) {
+                    console.log('Login successful, storing token');
+                    localStorage.setItem('access_token', data.access_token);
+                    // Confirm token is set before redirecting
+                    const storedToken = localStorage.getItem('access_token');
+                    console.log('Stored token:', storedToken);
+                    if (storedToken) {
+                        console.log('Token stored successfully, redirecting to /devices');
+                        window.location.href = '/devices';
+                    } else {
+                        throw new Error('Failed to store access token');
+                    }
+                } else {
+                    throw new Error(data.message || 'Login failed');
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert(error.message || 'An error occurred during login. Please try again.');
+            });
+        });
+    }
+
+    function getAuthHeader() {
+        const token = localStorage.getItem('access_token');
+        console.log('Retrieved token for auth header:', token);
+        return token ? { 'Authorization': `Bearer ${token}` } : {};
+    }
+
+    function handleUnauthorized() {
+        console.log('Unauthorized access, clearing token and redirecting to login');
+        localStorage.removeItem('access_token');
+        window.location.href = '/login';
+    }
+
+    if (deviceList) {
+        console.log('Device list found, loading devices');
+        function loadDevices() {
+            const headers = getAuthHeader();
+            console.log('Headers for /api/devices request:', headers);
+            fetch('/api/devices', {
+                headers: headers
+            })
+            .then(response => {
+                console.log('Response status:', response.status);
+                if (response.status === 401) {
+                    handleUnauthorized();
+                    return;
+                }
+                return response.json();
+            })
+            .then(devices => {
+                if (devices) {
+                    console.log('Devices loaded:', devices);
+                    deviceList.innerHTML = '';
+                    devices.forEach(device => {
+                        const row = document.createElement('tr');
+                        row.innerHTML = `
+                            <td>${device.name}</td>
+                            <td>${device.ip_address}</td>
+                            <td>${device.mac_address}</td>
+                            <td>${device.status ? 'Online' : 'Offline'}</td>
+                            <td>
+                                <button class="btn btn-sm ${device.blocked ? 'btn-danger' : 'btn-success'}" onclick="toggleDevice(${device.id})">
+                                    ${device.blocked ? 'Unblock' : 'Block'}
+                                </button>
+                            </td>
+                        `;
+                        deviceList.appendChild(row);
+                    });
+                }
+            })
+            .catch(error => {
+                console.error('Error fetching devices:', error);
+                alert('Failed to load devices. Please try again.');
+            });
+        }
+
+        loadDevices();
+
+        window.toggleDevice = function(deviceId) {
+            const headers = getAuthHeader();
+            console.log('Headers for toggle device request:', headers);
+            fetch(`/api/devices/${deviceId}/toggle`, {
+                method: 'POST',
+                headers: headers
+            })
+            .then(response => {
+                console.log('Toggle device response status:', response.status);
+                if (response.status === 401) {
+                    handleUnauthorized();
+                    return;
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (data && data.success) {
+                    console.log('Device toggled successfully');
+                    loadDevices();
+                } else {
+                    throw new Error('Failed to toggle device status');
+                }
+            })
+            .catch(error => {
+                console.error('Error toggling device:', error);
+                alert(error.message || 'An error occurred. Please try again.');
+            });
+        };
+
+        if (scanButton) {
+            scanButton.addEventListener('click', function() {
+                const headers = getAuthHeader();
+                console.log('Headers for scan request:', headers);
+                fetch('/api/scan', {
+                    method: 'POST',
+                    headers: headers
+                })
+                .then(response => {
+                    console.log('Scan response status:', response.status);
+                    if (response.status === 401) {
+                        handleUnauthorized();
+                        return;
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    if (data && data.success) {
+                        console.log('Scan completed successfully');
+                        loadDevices();
+                    } else {
+                        throw new Error('Failed to scan for new devices');
+                    }
+                })
+                .catch(error => {
+                    console.error('Error scanning devices:', error);
+                    alert(error.message || 'An error occurred while scanning. Please try again.');
+                });
+            });
+        }
+    }
+});
+
+--------------------------------------------------
+
+Directory: ./templates/
+--------------------------------------------------
+File: ./templates/base.html
+--------------------------------------------------
+Contents of ./templates/base.html:
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wi-Fi Network Manager</title>
+    <link rel="stylesheet" href="https://cdn.replit.com/agent/bootstrap-agent-dark-theme.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/custom.css') }}">
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+        <div class="container">
+            <a class="navbar-brand" href="/">Wi-Fi Network Manager</a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav">
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('index') }}">Home</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('devices') }}">Devices</a>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        {% block content %}{% endblock %}
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>
+
+--------------------------------------------------
+
+File: ./templates/index.html
+--------------------------------------------------
+Contents of ./templates/index.html:
+{% extends "base.html" %}
+
+{% block content %}
+<h1>Welcome to Wi-Fi Network Manager</h1>
+<p>Manage your network devices with ease.</p>
+<a href="{{ url_for('login') }}" class="btn btn-primary">Login</a>
+<a href="{{ url_for('register') }}" class="btn btn-secondary">Register</a>
+{% endblock %}
+
+--------------------------------------------------
+
+File: ./templates/login.html
+--------------------------------------------------
+Contents of ./templates/login.html:
+{% extends "base.html" %}
+
+{% block content %}
+<h2>Login</h2>
+<form id="login-form">
+    <div class="mb-3">
+        <label for="username" class="form-label">Username</label>
+        <input type="text" class="form-control" id="username" name="username" required>
+    </div>
+    <div class="mb-3">
+        <label for="password" class="form-label">Password</label>
+        <input type="password" class="form-control" id="password" name="password" required>
+    </div>
+    <button type="submit" class="btn btn-primary">Login</button>
+</form>
+{% endblock %}
+
+--------------------------------------------------
+
+File: ./templates/register.html
+--------------------------------------------------
+Contents of ./templates/register.html:
+{% extends "base.html" %}
+
+{% block content %}
+<h2>Register</h2>
+<form action="{{ url_for('register') }}" method="post">
+    <div class="mb-3">
+        <label for="username" class="form-label">Username</label>
+        <input type="text" class="form-control" id="username" name="username" required>
+    </div>
+    <div class="mb-3">
+        <label for="email" class="form-label">Email</label>
+        <input type="email" class="form-control" id="email" name="email" required>
+    </div>
+    <div class="mb-3">
+        <label for="password" class="form-label">Password</label>
+        <input type="password" class="form-control" id="password" name="password" required>
+    </div>
+    <button type="submit" class="btn btn-primary">Register</button>
+</form>
+{% endblock %}
+
+--------------------------------------------------
+
+File: ./templates/devices.html
+--------------------------------------------------
+Contents of ./templates/devices.html:
+{% extends "base.html" %}
+
+{% block content %}
+<h2>Connected Devices</h2>
+<button id="scan-button" class="btn btn-primary mb-3">Scan for new devices</button>
+<table class="table table-striped">
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>IP Address</th>
+            <th>MAC Address</th>
+            <th>Status</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody id="device-list">
+        <!-- Device list will be populated by JavaScript -->
+    </tbody>
+</table>
+{% endblock %}
+
+--------------------------------------------------
+

@@ -1,0 +1,543 @@
+**Hello!**
+
+I understand that you're facing an issue where after logging in, you're getting `{"msg":"Missing Authorization Header"}` and the redirected page is not displaying as expected. Let's work together to resolve this issue and make sure your Replit app functions correctly.
+
+---
+
+## **Understanding the Issue**
+
+The error message `{"msg":"Missing Authorization Header"}` indicates that the server expects an `Authorization` header with a valid JWT token, but it's not receiving one. This is happening when the browser navigates to the `/devices` route after login.
+
+The main reason for this issue is that when you redirect to `/devices` using `window.location.href`, the browser makes a new HTTP GET request without including the `Authorization` header, because headers set in JavaScript `fetch` requests are not preserved during page navigation.
+
+---
+
+## **Solution Overview**
+
+To fix this, we'll:
+
+1. **Configure JWTs to be stored in cookies**: This way, the JWT token will be automatically sent with each request, including page navigations, because cookies are automatically included in HTTP requests.
+
+2. **Adjust the login route** to set the JWT in a cookie and redirect to the protected page.
+
+3. **Modify JavaScript fetch requests** to include credentials (cookies) by setting `credentials: 'same-origin'`.
+
+4. **Update templates and JavaScript code** to remove unnecessary storage and handling of the JWT in `localStorage`.
+
+---
+
+## **Updated Code and Explanations**
+
+### **1. `app.py`**
+
+**Changes:**
+
+- Configured Flask-JWT-Extended to use cookies for storing JWT tokens.
+- Adjusted the JWT configuration settings.
+
+**Updated Code:**
+
+```python
+import os
+from flask import Flask
+from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy.orm import DeclarativeBase
+from flask_jwt_extended import JWTManager
+
+class Base(DeclarativeBase):
+    pass
+
+db = SQLAlchemy(model_class=Base)
+app = Flask(__name__)
+
+# Setup secret key and database
+app.secret_key = os.environ.get("FLASK_SECRET_KEY") or "a secret key"
+app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get("DATABASE_URL") or "sqlite:///database.db"
+app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
+    "pool_recycle": 300,
+    "pool_pre_ping": True,
+}
+
+# Setup JWT to store tokens in cookies
+app.config["JWT_SECRET_KEY"] = os.environ.get("FLASK_SECRET_KEY") or "jwt secret key"
+app.config['JWT_TOKEN_LOCATION'] = ['cookies']
+app.config['JWT_ACCESS_COOKIE_NAME'] = 'access_token_cookie'
+app.config['JWT_COOKIE_CSRF_PROTECT'] = False  # Set to True and implement CSRF protection in production
+jwt = JWTManager(app)
+
+db.init_app(app)
+
+with app.app_context():
+    import models
+    db.create_all()
+
+from routes import *
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
+```
+
+**Explanation:**
+
+- **JWT Configuration Changes:**
+  - `JWT_TOKEN_LOCATION`: Specifies that the JWT should be stored in cookies.
+  - `JWT_ACCESS_COOKIE_NAME`: The name of the cookie where the JWT will be stored.
+  - `JWT_COOKIE_CSRF_PROTECT`: Disables CSRF protection for simplicity (enable and implement CSRF protection in production).
+- These changes ensure that the JWT token is sent automatically with each HTTP request via cookies.
+
+---
+
+### **2. `routes.py`**
+
+**Changes:**
+
+- Modified the `/login` route to set the JWT in a cookie and redirect to the `/devices` page.
+- Added a `/logout` route to clear the JWT cookie.
+- Kept the `@jwt_required()` decorator on the `/devices` route to protect it.
+
+**Updated Code:**
+
+```python
+from flask import render_template, request, jsonify, redirect, url_for
+from flask_jwt_extended import (
+    create_access_token,
+    jwt_required,
+    get_jwt_identity,
+    set_access_cookies,
+    unset_jwt_cookies
+)
+from app import app, db
+from models import User, Device
+from network_scanner import scan_network
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    if request.method == 'POST':
+        username = request.form['username']
+        email = request.form['email']
+        password = request.form['password']
+
+        user = User(username=username, email=email)
+        user.set_password(password)
+        db.session.add(user)
+        db.session.commit()
+
+        return redirect(url_for('login'))
+
+    return render_template('register.html')
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        # Get form data
+        username = request.form['username']
+        password = request.form['password']
+
+        # Authenticate user
+        user = User.query.filter_by(username=username).first()
+        if user and user.check_password(password):
+            # Create JWT token
+            access_token = create_access_token(identity=user.id)
+            # Set JWT in a cookie and redirect
+            response = redirect(url_for('devices'))
+            set_access_cookies(response, access_token)
+            return response
+
+        # Authentication failed
+        return render_template('login.html', error="Invalid username or password")
+
+    return render_template('login.html')
+
+@app.route('/logout')
+def logout():
+    response = redirect(url_for('login'))
+    unset_jwt_cookies(response)
+    return response
+
+@app.route('/devices')
+@jwt_required()
+def devices():
+    return render_template('devices.html')
+
+@app.route('/api/devices', methods=['GET'])
+@jwt_required()
+def get_devices():
+    devices = Device.query.all()
+    return jsonify([{
+        'id': device.id,
+        'name': device.name,
+        'ip_address': device.ip_address,
+        'mac_address': device.mac_address,
+        'status': device.status,
+        'blocked': device.blocked
+    } for device in devices])
+
+@app.route('/api/devices/<int:device_id>/toggle', methods=['POST'])
+@jwt_required()
+def toggle_device(device_id):
+    device = Device.query.get_or_404(device_id)
+    device.blocked = not device.blocked
+    db.session.commit()
+    return jsonify({'success': True, 'blocked': device.blocked})
+
+@app.route('/api/scan', methods=['POST'])
+@jwt_required()
+def scan():
+    new_devices = scan_network()
+    for device in new_devices:
+        existing_device = Device.query.filter_by(mac_address=device['mac_address']).first()
+        if not existing_device:
+            new_device = Device(**device)
+            db.session.add(new_device)
+    db.session.commit()
+    return jsonify({'success': True})
+```
+
+**Explanation:**
+
+- **Login Route:**
+  - Upon successful authentication, creates a JWT and sets it in a cookie using `set_access_cookies`.
+  - Redirects the user to the `/devices` page.
+- **Logout Route:**
+  - Clears the JWT cookie using `unset_jwt_cookies`.
+  - Redirects the user to the login page.
+- **Devices Route:**
+  - Remains protected with `@jwt_required()` since the JWT is now sent in cookies.
+- **Removed the need to handle tokens in the frontend JavaScript code.**
+
+---
+
+### **3. `static/js/main.js`**
+
+**Changes:**
+
+- Removed code related to handling JWT tokens in `localStorage`.
+- Adjusted `fetch` requests to include `credentials: 'same-origin'` to ensure cookies are sent.
+- Removed the login form submission handling since it's now managed by the server.
+
+**Updated Code:**
+
+```javascript
+document.addEventListener('DOMContentLoaded', function() {
+    const deviceList = document.getElementById('device-list');
+    const scanButton = document.getElementById('scan-button');
+
+    console.log('DOM Content Loaded');
+
+    function handleUnauthorized() {
+        console.log('Unauthorized access, redirecting to login');
+        window.location.href = '/login';
+    }
+
+    if (deviceList) {
+        console.log('Device list found, loading devices');
+
+        function loadDevices() {
+            fetch('/api/devices', {
+                credentials: 'same-origin'
+            })
+            .then(response => {
+                console.log('Response status:', response.status);
+                if (response.status === 401) {
+                    handleUnauthorized();
+                    return;
+                }
+                return response.json();
+            })
+            .then(devices => {
+                if (devices) {
+                    console.log('Devices loaded:', devices);
+                    deviceList.innerHTML = '';
+                    devices.forEach(device => {
+                        const row = document.createElement('tr');
+                        row.innerHTML = `
+                            <td>${device.name}</td>
+                            <td>${device.ip_address}</td>
+                            <td>${device.mac_address}</td>
+                            <td>${device.status ? 'Online' : 'Offline'}</td>
+                            <td>
+                                <button class="btn btn-sm ${device.blocked ? 'btn-danger' : 'btn-success'}" onclick="toggleDevice(${device.id})">
+                                    ${device.blocked ? 'Unblock' : 'Block'}
+                                </button>
+                            </td>
+                        `;
+                        deviceList.appendChild(row);
+                    });
+                }
+            })
+            .catch(error => {
+                console.error('Error fetching devices:', error);
+                alert('Failed to load devices. Please try again.');
+            });
+        }
+
+        loadDevices();
+
+        window.toggleDevice = function(deviceId) {
+            fetch(`/api/devices/${deviceId}/toggle`, {
+                method: 'POST',
+                credentials: 'same-origin'
+            })
+            .then(response => {
+                console.log('Toggle device response status:', response.status);
+                if (response.status === 401) {
+                    handleUnauthorized();
+                    return;
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (data && data.success) {
+                    console.log('Device toggled successfully');
+                    loadDevices();
+                } else {
+                    throw new Error('Failed to toggle device status');
+                }
+            })
+            .catch(error => {
+                console.error('Error toggling device:', error);
+                alert(error.message || 'An error occurred. Please try again.');
+            });
+        };
+
+        if (scanButton) {
+            scanButton.addEventListener('click', function() {
+                fetch('/api/scan', {
+                    method: 'POST',
+                    credentials: 'same-origin'
+                })
+                .then(response => {
+                    console.log('Scan response status:', response.status);
+                    if (response.status === 401) {
+                        handleUnauthorized();
+                        return;
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    if (data && data.success) {
+                        console.log('Scan completed successfully');
+                        loadDevices();
+                    } else {
+                        throw new Error('Failed to scan for new devices');
+                    }
+                })
+                .catch(error => {
+                    console.error('Error scanning devices:', error);
+                    alert(error.message || 'An error occurred while scanning. Please try again.');
+                });
+            });
+        }
+    }
+});
+```
+
+**Explanation:**
+
+- **Removed `getAuthHeader` Function:**
+  - Since the JWT is stored in cookies, we no longer need to set the `Authorization` header.
+- **Fetch Requests:**
+  - Added `credentials: 'same-origin'` to ensure cookies are sent with the requests.
+- **Removed Login Handling:**
+  - The login form is now submitted directly to the server, so the JavaScript code is no longer needed for handling login.
+- **Error Handling:**
+  - The `handleUnauthorized` function redirects the user to the login page if a 401 Unauthorized response is received.
+
+---
+
+### **4. `templates/login.html`**
+
+**Changes:**
+
+- Updated the login form to submit directly to the server via POST.
+- Removed any JavaScript dependencies for form submission.
+
+**Updated Code:**
+
+```html
+{% extends "base.html" %}
+
+{% block content %}
+<h2>Login</h2>
+{% if error %}
+<div class="alert alert-danger">{{ error }}</div>
+{% endif %}
+<form action="{{ url_for('login') }}" method="post">
+    <div class="mb-3">
+        <label for="username" class="form-label">Username</label>
+        <input type="text" class="form-control" id="username" name="username" required>
+    </div>
+    <div class="mb-3">
+        <label for="password" class="form-label">Password</label>
+        <input type="password" class="form-control" id="password" name="password" required>
+    </div>
+    <button type="submit" class="btn btn-primary">Login</button>
+</form>
+{% endblock %}
+```
+
+**Explanation:**
+
+- **Form Submission:**
+  - The form now has an `action` pointing to the `/login` route and uses the `POST` method.
+  - This allows the server to handle authentication and set the JWT cookie directly.
+- **Error Handling:**
+  - Displays an error message if authentication fails.
+
+---
+
+### **5. `templates/base.html`**
+
+**Changes:**
+
+- Added a conditional logout link in the navbar.
+- Created a context processor to pass authentication status to templates.
+
+**Updated Code for `base.html`:**
+
+```html
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wi-Fi Network Manager</title>
+    <link rel="stylesheet" href="https://cdn.replit.com/agent/bootstrap-agent-dark-theme.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/custom.css') }}">
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+        <div class="container">
+            <a class="navbar-brand" href="/">Wi-Fi Network Manager</a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav me-auto">
+                    {% if logged_in %}
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('devices') }}">Devices</a>
+                    </li>
+                    {% endif %}
+                </ul>
+                <ul class="navbar-nav">
+                    {% if logged_in %}
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('logout') }}">Logout</a>
+                    </li>
+                    {% else %}
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('login') }}">Login</a>
+                    </li>
+                    {% endif %}
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        {% block content %}{% endblock %}
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>
+```
+
+**Updated Code in `app.py` for Context Processor:**
+
+```python
+# Add this at the end of app.py
+
+@app.context_processor
+def inject_logged_in():
+    from flask_jwt_extended import verify_jwt_in_request, get_jwt_identity, NoAuthorizationError
+
+    try:
+        verify_jwt_in_request(optional=True)
+        user_id = get_jwt_identity()
+        return {'logged_in': bool(user_id)}
+    except NoAuthorizationError:
+        return {'logged_in': False}
+```
+
+**Explanation:**
+
+- **Navbar Links:**
+  - Shows the "Devices" link and "Logout" link only if the user is logged in.
+- **Context Processor:**
+  - Adds a `logged_in` variable to the template context to determine if a user is authenticated.
+  - Uses `verify_jwt_in_request` with `optional=True` to avoid raising an exception if no JWT is present.
+
+---
+
+### **6. Other Templates (`register.html`, `devices.html`, `index.html`)**
+
+No major changes are needed in these templates. Ensure that:
+
+- **`register.html`**: The registration form submits directly to the server.
+- **`devices.html`**: Remains as is since the data is loaded via JavaScript.
+- **`index.html`**: Adjust links based on the user's authentication status if desired.
+
+---
+
+### **7. `models.py`, `network_scanner.py`**
+
+No changes are required in these files unless you wish to implement additional features or fix any existing issues.
+
+---
+
+## **Testing the Application**
+
+1. **Start the Flask App:**
+
+   ```bash
+   python app.py
+   ```
+
+2. **Register a New User:**
+
+   - Navigate to `/register`.
+   - Fill out the form and submit.
+
+3. **Login:**
+
+   - After registering, navigate to `/login`.
+   - Enter your credentials and submit.
+
+4. **Access Protected Routes:**
+
+   - You should be redirected to `/devices`.
+   - The devices should load correctly.
+   - You can test blocking/unblocking devices and scanning for new devices.
+
+5. **Logout:**
+
+   - Click on the "Logout" link in the navbar.
+   - You should be redirected to the login page.
+
+6. **Attempt Unauthorized Access:**
+
+   - Try accessing `/devices` without logging in.
+   - You should be redirected to the login page.
+
+---
+
+## **Final Notes**
+
+- **Security Considerations:**
+  - In production, enable CSRF protection by setting `JWT_COOKIE_CSRF_PROTECT = True` and implement CSRF tokens in your forms and AJAX requests.
+  - Use secure cookies by setting `JWT_COOKIE_SECURE = True` when serving over HTTPS.
+- **Environment Variables:**
+  - Ensure that `FLASK_SECRET_KEY` and `DATABASE_URL` are set appropriately in your Replit environment.
+- **Database Initialization:**
+  - If using SQLite, ensure the database file is accessible and that migrations are applied if using Flask-Migrate.
+
+---
+
+**I hope these adjustments help you get your Replit app working as expected! If you have any further questions or need additional assistance, please let me know.**

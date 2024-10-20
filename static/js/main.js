@@ -23,37 +23,41 @@ document.addEventListener('DOMContentLoaded', function() {
             .then(data => {
                 if (data.access_token) {
                     localStorage.setItem('access_token', data.access_token);
-                    // Redirect to devices page after setting the token
-                    window.location.href = '/devices';
+                    // Confirm token is set before redirecting
+                    if (localStorage.getItem('access_token')) {
+                        window.location.href = '/devices';
+                    } else {
+                        throw new Error('Failed to store access token');
+                    }
                 } else {
-                    alert('Login failed. Please try again.');
+                    throw new Error(data.message || 'Login failed');
                 }
             })
             .catch(error => {
                 console.error('Error:', error);
-                alert('An error occurred during login. Please try again.');
+                alert(error.message || 'An error occurred during login. Please try again.');
             });
         });
     }
 
+    function getAuthHeader() {
+        const token = localStorage.getItem('access_token');
+        return token ? { 'Authorization': `Bearer ${token}` } : {};
+    }
+
+    function handleUnauthorized() {
+        localStorage.removeItem('access_token');
+        window.location.href = '/login';
+    }
+
     if (deviceList) {
         function loadDevices() {
-            const token = localStorage.getItem('access_token');
-            if (!token) {
-                window.location.href = '/login';
-                return;
-            }
-
             fetch('/api/devices', {
-                headers: {
-                    'Authorization': `Bearer ${token}`
-                }
+                headers: getAuthHeader()
             })
             .then(response => {
                 if (response.status === 401) {
-                    // Token is invalid or expired
-                    localStorage.removeItem('access_token');
-                    window.location.href = '/login';
+                    handleUnauthorized();
                     return;
                 }
                 return response.json();
@@ -87,22 +91,13 @@ document.addEventListener('DOMContentLoaded', function() {
         loadDevices();
 
         window.toggleDevice = function(deviceId) {
-            const token = localStorage.getItem('access_token');
-            if (!token) {
-                window.location.href = '/login';
-                return;
-            }
-
             fetch(`/api/devices/${deviceId}/toggle`, {
                 method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${token}`
-                }
+                headers: getAuthHeader()
             })
             .then(response => {
                 if (response.status === 401) {
-                    localStorage.removeItem('access_token');
-                    window.location.href = '/login';
+                    handleUnauthorized();
                     return;
                 }
                 return response.json();
@@ -111,33 +106,24 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (data && data.success) {
                     loadDevices();
                 } else {
-                    alert('Failed to toggle device status. Please try again.');
+                    throw new Error('Failed to toggle device status');
                 }
             })
             .catch(error => {
                 console.error('Error toggling device:', error);
-                alert('An error occurred. Please try again.');
+                alert(error.message || 'An error occurred. Please try again.');
             });
         };
 
         if (scanButton) {
             scanButton.addEventListener('click', function() {
-                const token = localStorage.getItem('access_token');
-                if (!token) {
-                    window.location.href = '/login';
-                    return;
-                }
-
                 fetch('/api/scan', {
                     method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${token}`
-                    }
+                    headers: getAuthHeader()
                 })
                 .then(response => {
                     if (response.status === 401) {
-                        localStorage.removeItem('access_token');
-                        window.location.href = '/login';
+                        handleUnauthorized();
                         return;
                     }
                     return response.json();
@@ -146,12 +132,12 @@ document.addEventListener('DOMContentLoaded', function() {
                     if (data && data.success) {
                         loadDevices();
                     } else {
-                        alert('Failed to scan for new devices. Please try again.');
+                        throw new Error('Failed to scan for new devices');
                     }
                 })
                 .catch(error => {
                     console.error('Error scanning devices:', error);
-                    alert('An error occurred while scanning. Please try again.');
+                    alert(error.message || 'An error occurred while scanning. Please try again.');
                 });
             });
         }

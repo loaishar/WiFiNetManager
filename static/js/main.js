@@ -186,7 +186,6 @@ document.addEventListener('DOMContentLoaded', function() {
                     if (data && data.success) {
                         console.log('Scan completed successfully');
                         // The server will emit a WebSocket event with updated devices
-                        loadDevices(); // Reload devices after successful scan
                     } else {
                         throw new Error('Failed to scan for new devices');
                     }

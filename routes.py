@@ -1,4 +1,4 @@
-from flask import render_template, request, jsonify, redirect, url_for
+from flask import render_template, request, jsonify, redirect, url_for, flash
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, set_access_cookies
 from app import app, db, jwt
 from models import User, Device
@@ -29,19 +29,28 @@ def register():
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
+    logging.debug("Entering login route")
     if request.method == 'POST':
+        logging.debug("Processing POST request for login")
         username = request.form['username']
         password = request.form['password']
+        logging.debug(f"Attempting login for user: {username}")
 
         user = User.query.filter_by(username=username).first()
         if user and user.check_password(password):
+            logging.debug("User authenticated successfully")
             access_token = create_access_token(identity=user.id)
+            logging.debug(f"Access token created: {access_token[:10]}...")
             response = redirect(url_for('devices'))
             set_access_cookies(response, access_token)
+            logging.debug("Access token set in cookies")
+            logging.debug(f"Redirecting to: {response.location}")
             return response
+        else:
+            logging.debug("Authentication failed")
+            flash('Invalid username or password', 'error')
 
-        return render_template('login.html', error="Invalid username or password")
-
+    logging.debug("Rendering login template")
     return render_template('login.html')
 
 @app.route('/devices')
@@ -93,3 +102,8 @@ def logout():
     response = redirect(url_for('login'))
     jwt.unset_jwt_cookies(response)
     return response
+
+@app.errorhandler(Exception)
+def handle_error(e):
+    logging.error(f"An error occurred: {str(e)}")
+    return jsonify(error=str(e)), 500

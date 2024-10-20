@@ -3,6 +3,8 @@ document.addEventListener('DOMContentLoaded', function() {
     const deviceList = document.getElementById('device-list');
     const scanButton = document.getElementById('scan-button');
 
+    console.log('DOM Content Loaded');
+
     if (loginForm) {
         loginForm.addEventListener('submit', function(e) {
             e.preventDefault();
@@ -22,9 +24,13 @@ document.addEventListener('DOMContentLoaded', function() {
             .then(response => response.json())
             .then(data => {
                 if (data.access_token) {
+                    console.log('Login successful, storing token');
                     localStorage.setItem('access_token', data.access_token);
                     // Confirm token is set before redirecting
-                    if (localStorage.getItem('access_token')) {
+                    const storedToken = localStorage.getItem('access_token');
+                    console.log('Stored token:', storedToken);
+                    if (storedToken) {
+                        console.log('Token stored successfully, redirecting to /devices');
                         window.location.href = '/devices';
                     } else {
                         throw new Error('Failed to store access token');
@@ -42,20 +48,26 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function getAuthHeader() {
         const token = localStorage.getItem('access_token');
+        console.log('Retrieved token for auth header:', token);
         return token ? { 'Authorization': `Bearer ${token}` } : {};
     }
 
     function handleUnauthorized() {
+        console.log('Unauthorized access, clearing token and redirecting to login');
         localStorage.removeItem('access_token');
         window.location.href = '/login';
     }
 
     if (deviceList) {
+        console.log('Device list found, loading devices');
         function loadDevices() {
+            const headers = getAuthHeader();
+            console.log('Headers for /api/devices request:', headers);
             fetch('/api/devices', {
-                headers: getAuthHeader()
+                headers: headers
             })
             .then(response => {
+                console.log('Response status:', response.status);
                 if (response.status === 401) {
                     handleUnauthorized();
                     return;
@@ -64,6 +76,7 @@ document.addEventListener('DOMContentLoaded', function() {
             })
             .then(devices => {
                 if (devices) {
+                    console.log('Devices loaded:', devices);
                     deviceList.innerHTML = '';
                     devices.forEach(device => {
                         const row = document.createElement('tr');
@@ -91,11 +104,14 @@ document.addEventListener('DOMContentLoaded', function() {
         loadDevices();
 
         window.toggleDevice = function(deviceId) {
+            const headers = getAuthHeader();
+            console.log('Headers for toggle device request:', headers);
             fetch(`/api/devices/${deviceId}/toggle`, {
                 method: 'POST',
-                headers: getAuthHeader()
+                headers: headers
             })
             .then(response => {
+                console.log('Toggle device response status:', response.status);
                 if (response.status === 401) {
                     handleUnauthorized();
                     return;
@@ -104,6 +120,7 @@ document.addEventListener('DOMContentLoaded', function() {
             })
             .then(data => {
                 if (data && data.success) {
+                    console.log('Device toggled successfully');
                     loadDevices();
                 } else {
                     throw new Error('Failed to toggle device status');
@@ -117,11 +134,14 @@ document.addEventListener('DOMContentLoaded', function() {
 
         if (scanButton) {
             scanButton.addEventListener('click', function() {
+                const headers = getAuthHeader();
+                console.log('Headers for scan request:', headers);
                 fetch('/api/scan', {
                     method: 'POST',
-                    headers: getAuthHeader()
+                    headers: headers
                 })
                 .then(response => {
+                    console.log('Scan response status:', response.status);
                     if (response.status === 401) {
                         handleUnauthorized();
                         return;
@@ -130,6 +150,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 })
                 .then(data => {
                     if (data && data.success) {
+                        console.log('Scan completed successfully');
                         loadDevices();
                     } else {
                         throw new Error('Failed to scan for new devices');

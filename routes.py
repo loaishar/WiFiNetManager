@@ -68,6 +68,7 @@ def get_devices():
     logging.info("Fetching devices")
     try:
         devices = Device.query.all()
+        logging.debug(f"Found {len(devices)} devices")
         return jsonify([{
             'id': device.id,
             'name': device.name,
@@ -113,14 +114,17 @@ def scan():
     logging.info("Scanning for new devices")
     try:
         new_devices = scan_network()
+        logging.debug(f"Scan returned {len(new_devices)} devices")
         for device_data in new_devices:
             existing_device = Device.query.filter_by(mac_address=device_data['mac_address']).first()
             if existing_device:
+                logging.debug(f"Updating existing device: {existing_device.name}")
                 existing_device.name = device_data['name']
                 existing_device.ip_address = device_data['ip_address']
                 existing_device.status = device_data['status']
                 existing_device.last_seen = device_data['last_seen']
             else:
+                logging.debug(f"Adding new device: {device_data['name']}")
                 new_device = Device(
                     name=device_data['name'],
                     ip_address=device_data['ip_address'],

@@ -6,25 +6,33 @@ document.addEventListener('DOMContentLoaded', function() {
     console.log('DOM Content Loaded');
 
     // Initialize Socket.IO
-    const socket = io();
+    let socket;
+    try {
+        socket = io();
+        console.log('Socket.IO initialized');
+    } catch (error) {
+        console.error('Error initializing Socket.IO:', error);
+    }
 
-    socket.on('connect', function() {
-        console.log('Connected to WebSocket');
-    });
+    if (socket) {
+        socket.on('connect', function() {
+            console.log('Connected to WebSocket');
+        });
 
-    socket.on('disconnect', function() {
-        console.log('Disconnected from WebSocket');
-    });
+        socket.on('disconnect', function() {
+            console.log('Disconnected from WebSocket');
+        });
 
-    socket.on('device_update', function(device) {
-        console.log('Device update received:', device);
-        updateDeviceInList(device);
-    });
+        socket.on('device_update', function(device) {
+            console.log('Device update received:', device);
+            updateDeviceInList(device);
+        });
 
-    socket.on('devices_update', function(devices) {
-        console.log('Devices update received:', devices);
-        refreshDeviceList(devices);
-    });
+        socket.on('devices_update', function(devices) {
+            console.log('Devices update received:', devices);
+            refreshDeviceList(devices);
+        });
+    }
 
     function handleUnauthorized() {
         console.log('Unauthorized access, redirecting to login');
@@ -159,6 +167,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         if (scanButton) {
             scanButton.addEventListener('click', function() {
+                console.log('Scan button clicked');
                 showLoading(true);
                 fetch('/api/scan', {
                     method: 'POST',
@@ -177,6 +186,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     if (data && data.success) {
                         console.log('Scan completed successfully');
                         // The server will emit a WebSocket event with updated devices
+                        loadDevices(); // Reload devices after successful scan
                     } else {
                         throw new Error('Failed to scan for new devices');
                     }

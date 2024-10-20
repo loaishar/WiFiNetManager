@@ -4,6 +4,7 @@ from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.orm import DeclarativeBase
 from flask_jwt_extended import JWTManager, verify_jwt_in_request, get_jwt_identity
 from flask_migrate import Migrate
+from flask_socketio import SocketIO
 import logging
 
 class Base(DeclarativeBase):
@@ -12,6 +13,7 @@ class Base(DeclarativeBase):
 db = SQLAlchemy(model_class=Base)
 app = Flask(__name__)
 migrate = Migrate(app, db)
+socketio = SocketIO(app, cors_allowed_origins="*")
 
 # Setup logging
 logging.basicConfig(
@@ -65,4 +67,4 @@ def internal_error(error):
     return render_template('500.html'), 500
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    socketio.run(app, host="0.0.0.0", port=5000, debug=True)

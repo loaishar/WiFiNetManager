@@ -1,6 +1,6 @@
 from flask import render_template, request, jsonify, redirect, url_for, flash
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, set_access_cookies
-from app import app, db
+from app import app, db, socketio
 from models import User, Device
 from network_scanner import scan_network
 import logging
@@ -89,6 +89,18 @@ def toggle_device(device_id):
         device = Device.query.get_or_404(device_id)
         device.blocked = not device.blocked
         db.session.commit()
+        
+        # Emit a WebSocket event to notify clients about the device update
+        socketio.emit('device_update', {
+            'id': device.id,
+            'name': device.name,
+            'ip_address': device.ip_address,
+            'mac_address': device.mac_address,
+            'status': device.status,
+            'blocked': device.blocked,
+            'last_seen': device.last_seen.isoformat() if device.last_seen else None
+        })
+        
         return jsonify({'success': True, 'blocked': device.blocked})
     except Exception as e:
         logging.error(f"Error toggling device {device_id}: {str(e)}")
@@ -119,6 +131,19 @@ def scan():
                 )
                 db.session.add(new_device)
         db.session.commit()
+        
+        # Emit a WebSocket event to notify clients about the new scan results
+        devices = Device.query.all()
+        socketio.emit('devices_update', [{
+            'id': device.id,
+            'name': device.name,
+            'ip_address': device.ip_address,
+            'mac_address': device.mac_address,
+            'status': device.status,
+            'blocked': device.blocked,
+            'last_seen': device.last_seen.isoformat() if device.last_seen else None
+        } for device in devices])
+        
         logging.info(f"Scan completed, {len(new_devices)} devices processed")
         return jsonify({'success': True})
     except Exception as e:
@@ -144,3 +169,12 @@ def internal_error(error):
     logging.error(f"500 error: {error}")
     db.session.rollback()
     return render_template('500.html'), 500
+
+# WebSocket event handlers
+@socketio.on('connect')
+def handle_connect():
+    logging.info("Client connected to WebSocket")
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    logging.info("Client disconnected from WebSocket")

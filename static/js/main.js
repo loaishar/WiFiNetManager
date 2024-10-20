@@ -5,6 +5,27 @@ document.addEventListener('DOMContentLoaded', function() {
 
     console.log('DOM Content Loaded');
 
+    // Initialize Socket.IO
+    const socket = io();
+
+    socket.on('connect', function() {
+        console.log('Connected to WebSocket');
+    });
+
+    socket.on('disconnect', function() {
+        console.log('Disconnected from WebSocket');
+    });
+
+    socket.on('device_update', function(device) {
+        console.log('Device update received:', device);
+        updateDeviceInList(device);
+    });
+
+    socket.on('devices_update', function(devices) {
+        console.log('Devices update received:', devices);
+        refreshDeviceList(devices);
+    });
+
     function handleUnauthorized() {
         console.log('Unauthorized access, redirecting to login');
         window.location.href = '/login';
@@ -12,6 +33,49 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function showLoading(show) {
         loadingIndicator.style.display = show ? 'block' : 'none';
+    }
+
+    function updateDeviceInList(device) {
+        const row = document.querySelector(`#device-list tr[data-device-id="${device.id}"]`);
+        if (row) {
+            const lastSeen = device.last_seen ? new Date(device.last_seen).toLocaleString() : 'N/A';
+            row.innerHTML = `
+                <td>${device.name}</td>
+                <td>${device.ip_address}</td>
+                <td>${device.mac_address}</td>
+                <td>${device.status ? 'Online' : 'Offline'}</td>
+                <td>${lastSeen}</td>
+                <td>
+                    <button class="btn btn-sm ${device.blocked ? 'btn-danger' : 'btn-success'}" onclick="toggleDevice(${device.id}, '${device.name}', ${device.blocked})">
+                        ${device.blocked ? 'Unblock' : 'Block'}
+                    </button>
+                </td>
+            `;
+        } else {
+            loadDevices(); // If the device is not in the list, reload all devices
+        }
+    }
+
+    function refreshDeviceList(devices) {
+        deviceList.innerHTML = '';
+        devices.forEach(device => {
+            const row = document.createElement('tr');
+            row.setAttribute('data-device-id', device.id);
+            const lastSeen = device.last_seen ? new Date(device.last_seen).toLocaleString() : 'N/A';
+            row.innerHTML = `
+                <td>${device.name}</td>
+                <td>${device.ip_address}</td>
+                <td>${device.mac_address}</td>
+                <td>${device.status ? 'Online' : 'Offline'}</td>
+                <td>${lastSeen}</td>
+                <td>
+                    <button class="btn btn-sm ${device.blocked ? 'btn-danger' : 'btn-success'}" onclick="toggleDevice(${device.id}, '${device.name}', ${device.blocked})">
+                        ${device.blocked ? 'Unblock' : 'Block'}
+                    </button>
+                </td>
+            `;
+            deviceList.appendChild(row);
+        });
     }
 
     if (deviceList) {
@@ -35,24 +99,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 showLoading(false);
                 if (devices) {
                     console.log('Devices loaded:', devices);
-                    deviceList.innerHTML = '';
-                    devices.forEach(device => {
-                        const row = document.createElement('tr');
-                        const lastSeen = device.last_seen ? new Date(device.last_seen).toLocaleString() : 'N/A';
-                        row.innerHTML = `
-                            <td>${device.name}</td>
-                            <td>${device.ip_address}</td>
-                            <td>${device.mac_address}</td>
-                            <td>${device.status ? 'Online' : 'Offline'}</td>
-                            <td>${lastSeen}</td>
-                            <td>
-                                <button class="btn btn-sm ${device.blocked ? 'btn-danger' : 'btn-success'}" onclick="toggleDevice(${device.id}, '${device.name}', ${device.blocked})">
-                                    ${device.blocked ? 'Unblock' : 'Block'}
-                                </button>
-                            </td>
-                        `;
-                        deviceList.appendChild(row);
-                    });
+                    refreshDeviceList(devices);
                 }
             })
             .catch(error => {
@@ -98,7 +145,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 showLoading(false);
                 if (data && data.success) {
                     console.log('Device toggled successfully');
-                    loadDevices();
+                    // The server will emit a WebSocket event, so we don't need to update the UI here
                 } else {
                     throw new Error('Failed to toggle device status');
                 }
@@ -129,7 +176,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     showLoading(false);
                     if (data && data.success) {
                         console.log('Scan completed successfully');
-                        loadDevices();
+                        // The server will emit a WebSocket event with updated devices
                     } else {
                         throw new Error('Failed to scan for new devices');
                     }

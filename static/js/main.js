@@ -8,7 +8,9 @@ document.addEventListener('DOMContentLoaded', function() {
     // Initialize Socket.IO with explicit configuration
     let socket;
     try {
-        socket = io('http://' + document.domain + ':' + location.port);
+        socket = io({
+            withCredentials: true
+        });
         console.log('Socket.IO initialized');
     } catch (error) {
         console.error('Error initializing Socket.IO:', error);
@@ -16,25 +18,20 @@ document.addEventListener('DOMContentLoaded', function() {
 
     if (socket) {
         socket.on('connect', function() {
-            console.log('Connected to WebSocket');
+            console.log('Connected to WebSocket server');
         });
 
         socket.on('disconnect', function() {
-            console.log('Disconnected from WebSocket');
+            console.log('Disconnected from WebSocket server');
         });
 
-        socket.on('device_update', function(device) {
+        socket.on('device_updated', function(device) {
             console.log('Device update received:', device);
             updateDeviceInList(device);
         });
 
-        socket.on('devices_update', function(devices) {
-            console.log('Devices update received:', devices);
-            refreshDeviceList(devices);
-        });
-
-        socket.on('connect_error', (error) => {
-            console.error('Socket.IO connection error:', error);
+        socket.on('error', function(error) {
+            console.error('WebSocket error:', error);
         });
     }
 
@@ -68,28 +65,6 @@ document.addEventListener('DOMContentLoaded', function() {
             console.log('Device not found in list, reloading all devices');
             loadDevices();
         }
-    }
-
-    function refreshDeviceList(devices) {
-        deviceList.innerHTML = '';
-        devices.forEach(device => {
-            const row = document.createElement('tr');
-            row.setAttribute('data-device-id', device.id);
-            const lastSeen = device.last_seen ? new Date(device.last_seen).toLocaleString() : 'N/A';
-            row.innerHTML = `
-                <td>${device.name}</td>
-                <td>${device.ip_address}</td>
-                <td>${device.mac_address}</td>
-                <td>${device.status ? 'Online' : 'Offline'}</td>
-                <td>${lastSeen}</td>
-                <td>
-                    <button class="btn btn-sm ${device.blocked ? 'btn-danger' : 'btn-success'}" onclick="toggleDevice(${device.id}, '${device.name}', ${device.blocked})">
-                        ${device.blocked ? 'Unblock' : 'Block'}
-                    </button>
-                </td>
-            `;
-            deviceList.appendChild(row);
-        });
     }
 
     if (deviceList) {
@@ -132,7 +107,12 @@ document.addEventListener('DOMContentLoaded', function() {
 
             const confirmYes = document.getElementById('confirmModalYes');
             confirmYes.onclick = function() {
-                executeToggleDevice(deviceId);
+                if (socket && socket.connected) {
+                    socket.emit('toggle_device', { device_id: deviceId });
+                } else {
+                    console.error('WebSocket not connected. Falling back to HTTP request.');
+                    executeToggleDevice(deviceId);
+                }
                 const modal = bootstrap.Modal.getInstance(document.getElementById('confirmModal'));
                 modal.hide();
             };
@@ -190,6 +170,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     showLoading(false);
                     if (data && data.success) {
                         console.log('Scan completed successfully');
+                        loadDevices();
                     } else {
                         throw new Error('Failed to scan for new devices');
                     }
@@ -203,3 +184,26 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 });
+
+function refreshDeviceList(devices) {
+    const deviceList = document.getElementById('device-list');
+    deviceList.innerHTML = '';
+    devices.forEach(device => {
+        const row = document.createElement('tr');
+        row.setAttribute('data-device-id', device.id);
+        const lastSeen = device.last_seen ? new Date(device.last_seen).toLocaleString() : 'N/A';
+        row.innerHTML = `
+            <td>${device.name}</td>
+            <td>${device.ip_address}</td>
+            <td>${device.mac_address}</td>
+            <td>${device.status ? 'Online' : 'Offline'}</td>
+            <td>${lastSeen}</td>
+            <td>
+                <button class="btn btn-sm ${device.blocked ? 'btn-danger' : 'btn-success'}" onclick="toggleDevice(${device.id}, '${device.name}', ${device.blocked})">
+                    ${device.blocked ? 'Unblock' : 'Block'}
+                </button>
+            </td>
+        `;
+        deviceList.appendChild(row);
+    });
+}

@@ -1,5 +1,5 @@
 from flask import render_template, request, jsonify, redirect, url_for, flash
-from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, set_access_cookies
+from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, set_access_cookies, verify_jwt_in_request
 from app import app, db, socketio
 from models import User, Device
 from network_scanner import scan_network
@@ -85,16 +85,13 @@ def get_devices():
 @app.route('/api/devices/<int:device_id>/toggle', methods=['POST'])
 @jwt_required()
 def toggle_device(device_id):
-    logging.info(f"Toggling device with ID: {device_id}")
     try:
         device = Device.query.get_or_404(device_id)
         device.blocked = not device.blocked
         db.session.commit()
         
-        logging.info(f"Device {device_id} blocked status changed to {device.blocked}")
-        
-        # Emit a WebSocket event to notify clients about the device update
-        device_data = {
+        # Emit WebSocket event
+        socketio.emit('device_updated', {
             'id': device.id,
             'name': device.name,
             'ip_address': device.ip_address,
@@ -102,14 +99,12 @@ def toggle_device(device_id):
             'status': device.status,
             'blocked': device.blocked,
             'last_seen': device.last_seen.isoformat() if device.last_seen else None
-        }
-        logging.info(f"Emitting 'device_update' event for device {device_id}")
-        socketio.emit('device_update', device_data, namespace='/')
-        logging.info(f"Emitted 'device_update' event for device {device_id}")
+        }, broadcast=True)
         
+        logging.info(f'Device {device_id} toggled via HTTP. New blocked status: {device.blocked}')
         return jsonify({'success': True, 'blocked': device.blocked})
     except Exception as e:
-        logging.error(f"Error toggling device {device_id}: {str(e)}")
+        logging.error(f'Error toggling device {device_id}: {str(e)}')
         db.session.rollback()
         return jsonify({'error': 'Internal server error'}), 500
 
@@ -180,11 +175,41 @@ def internal_error(error):
     db.session.rollback()
     return render_template('500.html'), 500
 
-# WebSocket event handlers
 @socketio.on('connect')
 def handle_connect():
-    logging.info("Client connected to WebSocket")
+    try:
+        verify_jwt_in_request()
+        user_id = get_jwt_identity()
+        logging.info(f'User {user_id} connected via WebSocket')
+    except Exception as e:
+        logging.error(f'Unauthenticated user attempted to connect: {str(e)}')
+        return False  # Disconnects the client
 
 @socketio.on('disconnect')
 def handle_disconnect():
-    logging.info("Client disconnected from WebSocket")
+    logging.info('Client disconnected from WebSocket')
+
+@socketio.on('toggle_device')
+def handle_toggle_device(data):
+    try:
+        verify_jwt_in_request()
+        device_id = data.get('device_id')
+        device = Device.query.get_or_404(device_id)
+        device.blocked = not device.blocked
+        db.session.commit()
+        
+        # Emit an event to all connected clients
+        socketio.emit('device_updated', {
+            'id': device.id,
+            'name': device.name,
+            'ip_address': device.ip_address,
+            'mac_address': device.mac_address,
+            'status': device.status,
+            'blocked': device.blocked,
+            'last_seen': device.last_seen.isoformat() if device.last_seen else None
+        }, broadcast=True)
+        
+        logging.info(f'Device {device_id} toggled. New blocked status: {device.blocked}')
+    except Exception as e:
+        logging.error(f'Error handling toggle_device: {str(e)}')
+        socketio.emit('error', {'message': 'Unauthorized or invalid request'})

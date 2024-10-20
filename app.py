@@ -5,6 +5,7 @@ from sqlalchemy.orm import DeclarativeBase
 from flask_jwt_extended import JWTManager, verify_jwt_in_request, get_jwt_identity
 from flask_migrate import Migrate
 from flask_socketio import SocketIO
+from flask_cors import CORS
 import logging
 
 class Base(DeclarativeBase):
@@ -12,6 +13,7 @@ class Base(DeclarativeBase):
 
 db = SQLAlchemy(model_class=Base)
 app = Flask(__name__)
+CORS(app, supports_credentials=True)
 migrate = Migrate(app, db)
 
 # Setup logging

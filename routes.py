@@ -103,6 +103,7 @@ def toggle_device(device_id):
             'blocked': device.blocked,
             'last_seen': device.last_seen.isoformat() if device.last_seen else None
         }
+        logging.info(f"Emitting 'device_update' event for device {device_id}")
         socketio.emit('device_update', device_data, namespace='/')
         logging.info(f"Emitted 'device_update' event for device {device_id}")
         

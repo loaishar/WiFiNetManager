@@ -5,10 +5,10 @@ document.addEventListener('DOMContentLoaded', function() {
 
     console.log('DOM Content Loaded');
 
-    // Initialize Socket.IO
+    // Initialize Socket.IO with explicit configuration
     let socket;
     try {
-        socket = io();
+        socket = io('http://' + document.domain + ':' + location.port);
         console.log('Socket.IO initialized');
     } catch (error) {
         console.error('Error initializing Socket.IO:', error);
@@ -48,6 +48,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     function updateDeviceInList(device) {
+        console.log('Updating device in list:', device);
         const row = document.querySelector(`#device-list tr[data-device-id="${device.id}"]`);
         if (row) {
             const lastSeen = device.last_seen ? new Date(device.last_seen).toLocaleString() : 'N/A';
@@ -158,7 +159,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 showLoading(false);
                 if (data && data.success) {
                     console.log('Device toggled successfully');
-                    // The server will emit a WebSocket event, so we don't need to update the UI here
                 } else {
                     throw new Error('Failed to toggle device status');
                 }
@@ -190,7 +190,6 @@ document.addEventListener('DOMContentLoaded', function() {
                     showLoading(false);
                     if (data && data.success) {
                         console.log('Scan completed successfully');
-                        // The server will emit a WebSocket event with updated devices
                     } else {
                         throw new Error('Failed to scan for new devices');
                     }

@@ -39,7 +39,7 @@ jwt = JWTManager(app)
 db.init_app(app)
 
 # Initialize SocketIO with CORS allowed
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet', logger=True, engineio_logger=True)
 
 with app.app_context():
     import models

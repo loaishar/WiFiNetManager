@@ -7,6 +7,9 @@ from flask_migrate import Migrate
 from flask_socketio import SocketIO
 from flask_cors import CORS
 import logging
+import eventlet
+
+eventlet.monkey_patch()
 
 class Base(DeclarativeBase):
     pass
@@ -40,8 +43,8 @@ jwt = JWTManager(app)
 
 db.init_app(app)
 
-# Initialize SocketIO with CORS allowed
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet', logger=True, engineio_logger=True)
+# Initialize SocketIO with CORS allowed, eventlet, and pingTimeout
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet', logger=True, engineio_logger=True, ping_timeout=60)
 
 with app.app_context():
     import models
@@ -73,6 +76,14 @@ def internal_error(error):
 @socketio.on_error()
 def error_handler(e):
     app.logger.error(f"SocketIO error: {str(e)}")
+
+@socketio.on('connect')
+def handle_connect():
+    app.logger.info("Client connected to WebSocket")
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    app.logger.info("Client disconnected from WebSocket")
 
 if __name__ == "__main__":
     socketio.run(app, host="0.0.0.0", port=5000, debug=True)

@@ -18,56 +18,6 @@ if __name__ == "__main__":
 
 --------------------------------------------------
 
-File: ./models.py
---------------------------------------------------
-Contents of ./models.py:
-from app import db
-from werkzeug.security import generate_password_hash, check_password_hash
-
-class User(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(64), unique=True, nullable=False)
-    email = db.Column(db.String(120), unique=True, nullable=False)
-    password_hash = db.Column(db.String(256))
-
-    def set_password(self, password):
-        self.password_hash = generate_password_hash(password)
-
-    def check_password(self, password):
-        return check_password_hash(self.password_hash, password)
-
-class Device(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(64), nullable=False)
-    ip_address = db.Column(db.String(15), nullable=False)
-    mac_address = db.Column(db.String(17), nullable=False)
-    status = db.Column(db.Boolean, default=True)
-    blocked = db.Column(db.Boolean, default=False)
-
---------------------------------------------------
-
-File: ./network_scanner.py
---------------------------------------------------
-Contents of ./network_scanner.py:
-import random
-
-def scan_network():
-    # Placeholder function for network scanning
-    # In a real implementation, this would use a library like scapy to scan the network
-    devices = []
-    for i in range(5):
-        device = {
-            'name': f'Device {i+1}',
-            'ip_address': f'192.168.1.{random.randint(2, 254)}',
-            'mac_address': ':'.join(['{:02x}'.format(random.randint(0, 255)) for _ in range(6)]),
-            'status': True,
-            'blocked': False
-        }
-        devices.append(device)
-    return devices
-
---------------------------------------------------
-
 File: ./generate_structure.py
 --------------------------------------------------
 Contents of ./generate_structure.py:
@@ -125,118 +75,69 @@ if __name__ == "__main__":
 
 --------------------------------------------------
 
-File: ./routes.py
+File: ./network_scanner.py
 --------------------------------------------------
-Contents of ./routes.py:
-from flask import render_template, request, jsonify, redirect, url_for, flash
-from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, set_access_cookies
-from app import app, db, jwt
-from models import User, Device
-from network_scanner import scan_network
-import logging
+Contents of ./network_scanner.py:
+import random
+from datetime import datetime, timedelta
 
-logging.basicConfig(level=logging.DEBUG)
+def generate_mac_address():
+    """Generate a random MAC address."""
+    return ':'.join(['{:02x}'.format(random.randint(0x00, 0xff)) for _ in range(6)])
 
-@app.route('/')
-def index():
-    return render_template('index.html')
+def generate_ip_address():
+    """Generate a random IP address within a private IP range."""
+    return f"192.168.1.{random.randint(2, 254)}"
 
-@app.route('/register', methods=['GET', 'POST'])
-def register():
-    if request.method == 'POST':
-        username = request.form['username']
-        email = request.form['email']
-        password = request.form['password']
+def generate_device_name():
+    """Generate a random device name."""
+    device_types = ['Laptop', 'Smartphone', 'Tablet', 'Smart TV', 'Printer', 'Camera']
+    return f"{random.choice(device_types)}-{random.randint(1000, 9999)}"
 
-        user = User(username=username, email=email)
-        user.set_password(password)
-        db.session.add(user)
-        db.session.commit()
+def scan_network():
+    """Simulate network scanning by generating a list of devices."""
+    devices = []
+    for _ in range(random.randint(5, 15)):
+        device = {
+            'name': generate_device_name(),
+            'ip_address': generate_ip_address(),
+            'mac_address': generate_mac_address(),
+            'status': random.choice([True, False]),
+            'blocked': False,
+            'last_seen': datetime.utcnow() - timedelta(minutes=random.randint(0, 60))
+        }
+        devices.append(device)
+    return devices
 
-        return redirect(url_for('login'))
+--------------------------------------------------
 
-    return render_template('register.html')
+File: ./models.py
+--------------------------------------------------
+Contents of ./models.py:
+from app import db
+from werkzeug.security import generate_password_hash, check_password_hash
+from datetime import datetime
 
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    logging.debug("Entering login route")
-    if request.method == 'POST':
-        logging.debug("Processing POST request for login")
-        username = request.form['username']
-        password = request.form['password']
-        logging.debug(f"Attempting login for user: {username}")
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(64), unique=True, nullable=False)
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    password_hash = db.Column(db.String(256))
 
-        user = User.query.filter_by(username=username).first()
-        if user and user.check_password(password):
-            logging.debug("User authenticated successfully")
-            access_token = create_access_token(identity=user.id)
-            logging.debug(f"Access token created: {access_token[:10]}...")
-            response = redirect(url_for('devices'))
-            set_access_cookies(response, access_token)
-            logging.debug("Access token set in cookies")
-            logging.debug(f"Redirecting to: {response.location}")
-            return response
-        else:
-            logging.debug("Authentication failed")
-            flash('Invalid username or password', 'error')
+    def set_password(self, password):
+        self.password_hash = generate_password_hash(password)
 
-    logging.debug("Rendering login template")
-    return render_template('login.html')
+    def check_password(self, password):
+        return check_password_hash(self.password_hash, password)
 
-@app.route('/devices')
-@jwt_required()
-def devices():
-    logging.debug("Accessing /devices route")
-    current_user_id = get_jwt_identity()
-    logging.debug(f"Current user ID: {current_user_id}")
-    return render_template('devices.html')
-
-@app.route('/api/devices', methods=['GET'])
-@jwt_required()
-def get_devices():
-    logging.debug("Accessing /api/devices route")
-    current_user_id = get_jwt_identity()
-    logging.debug(f"Current user ID: {current_user_id}")
-    devices = Device.query.all()
-    return jsonify([{
-        'id': device.id,
-        'name': device.name,
-        'ip_address': device.ip_address,
-        'mac_address': device.mac_address,
-        'status': device.status,
-        'blocked': device.blocked
-    } for device in devices])
-
-@app.route('/api/devices/<int:device_id>/toggle', methods=['POST'])
-@jwt_required()
-def toggle_device(device_id):
-    device = Device.query.get_or_404(device_id)
-    device.blocked = not device.blocked
-    db.session.commit()
-    return jsonify({'success': True, 'blocked': device.blocked})
-
-@app.route('/api/scan', methods=['POST'])
-@jwt_required()
-def scan():
-    new_devices = scan_network()
-    for device in new_devices:
-        existing_device = Device.query.filter_by(mac_address=device['mac_address']).first()
-        if not existing_device:
-            new_device = Device(**device)
-            db.session.add(new_device)
-    db.session.commit()
-    return jsonify({'success': True})
-
-@app.route('/logout')
-def logout():
-    response = redirect(url_for('login'))
-    jwt.unset_jwt_cookies(response)
-    return response
-
-@app.errorhandler(Exception)
-def handle_error(e):
-    logging.error(f"An error occurred: {str(e)}")
-    return jsonify(error=str(e)), 500
+class Device(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(128), nullable=False)
+    ip_address = db.Column(db.String(45), nullable=False, index=True)
+    mac_address = db.Column(db.String(17), unique=True, nullable=False, index=True)
+    status = db.Column(db.Boolean, default=True)
+    blocked = db.Column(db.Boolean, default=False)
+    last_seen = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 --------------------------------------------------
 
@@ -244,10 +145,13 @@ File: ./app.py
 --------------------------------------------------
 Contents of ./app.py:
 import os
-from flask import Flask
+from flask import Flask, render_template
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.orm import DeclarativeBase
 from flask_jwt_extended import JWTManager, verify_jwt_in_request, get_jwt_identity
+from flask_migrate import Migrate
+from flask_socketio import SocketIO
+from flask_cors import CORS
 import logging
 
 class Base(DeclarativeBase):
@@ -255,9 +159,15 @@ class Base(DeclarativeBase):
 
 db = SQLAlchemy(model_class=Base)
 app = Flask(__name__)
+CORS(app, supports_credentials=True)
+migrate = Migrate(app, db)
 
 # Setup logging
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
 
 # Setup secret key and database
 app.secret_key = os.environ.get("FLASK_SECRET_KEY") or "a secret key"
@@ -276,6 +186,9 @@ jwt = JWTManager(app)
 
 db.init_app(app)
 
+# Initialize SocketIO with CORS allowed
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet', logger=True, engineio_logger=True)
+
 with app.app_context():
     import models
     db.create_all()
@@ -289,12 +202,247 @@ def inject_logged_in():
         user_id = get_jwt_identity()
         return {'logged_in': bool(user_id)}
     except Exception as e:
-        logging.error(f"Error in context processor: {str(e)}")
+        app.logger.error(f"Error in context processor: {str(e)}")
         return {'logged_in': False}
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+@app.errorhandler(404)
+def not_found_error(error):
+    app.logger.error(f"404 error: {error}")
+    return render_template('404.html'), 404
 
+@app.errorhandler(500)
+def internal_error(error):
+    app.logger.error(f"500 error: {error}")
+    db.session.rollback()
+    return render_template('500.html'), 500
+
+@socketio.on_error()
+def error_handler(e):
+    app.logger.error(f"SocketIO error: {str(e)}")
+
+if __name__ == "__main__":
+    socketio.run(app, host="0.0.0.0", port=5000, debug=True)
+
+--------------------------------------------------
+
+File: ./routes.py
+--------------------------------------------------
+Contents of ./routes.py:
+from flask import render_template, request, jsonify, redirect, url_for, flash
+from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, set_access_cookies, verify_jwt_in_request
+from app import app, db, socketio
+from models import User, Device
+from network_scanner import scan_network
+import logging
+from datetime import datetime
+
+logging.basicConfig(level=logging.DEBUG)
+
+@app.route('/')
+def index():
+    logging.info("Accessing index route")
+    return render_template('index.html')
+
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    logging.info("Accessing register route")
+    if request.method == 'POST':
+        username = request.form['username']
+        email = request.form['email']
+        password = request.form['password']
+
+        try:
+            user = User(username=username, email=email)
+            user.set_password(password)
+            db.session.add(user)
+            db.session.commit()
+            logging.info(f"User {username} registered successfully")
+            return redirect(url_for('login'))
+        except Exception as e:
+            logging.error(f"Error during registration: {str(e)}")
+            db.session.rollback()
+            flash('Registration failed. Please try again.', 'error')
+
+    return render_template('register.html')
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    logging.info("Accessing login route")
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+
+        user = User.query.filter_by(username=username).first()
+        if user and user.check_password(password):
+            access_token = create_access_token(identity=user.id)
+            response = redirect(url_for('devices'))
+            set_access_cookies(response, access_token)
+            logging.info(f"User {username} logged in successfully")
+            return response
+        else:
+            logging.warning(f"Failed login attempt for user {username}")
+            flash('Invalid username or password', 'error')
+
+    return render_template('login.html')
+
+@app.route('/devices')
+@jwt_required()
+def devices():
+    logging.info("Accessing devices route")
+    current_user_id = get_jwt_identity()
+    return render_template('devices.html')
+
+@app.route('/api/devices', methods=['GET'])
+@jwt_required()
+def get_devices():
+    logging.info("Fetching devices")
+    try:
+        devices = Device.query.all()
+        logging.debug(f"Found {len(devices)} devices")
+        return jsonify([{
+            'id': device.id,
+            'name': device.name,
+            'ip_address': device.ip_address,
+            'mac_address': device.mac_address,
+            'status': device.status,
+            'blocked': device.blocked,
+            'last_seen': device.last_seen.isoformat() if device.last_seen else None
+        } for device in devices])
+    except Exception as e:
+        logging.error(f"Error fetching devices: {str(e)}")
+        return jsonify({'error': 'Internal server error'}), 500
+
+@app.route('/api/devices/<int:device_id>/toggle', methods=['POST'])
+@jwt_required()
+def toggle_device(device_id):
+    try:
+        device = Device.query.get_or_404(device_id)
+        device.blocked = not device.blocked
+        db.session.commit()
+        
+        # Emit WebSocket event
+        socketio.emit('device_updated', {
+            'id': device.id,
+            'name': device.name,
+            'ip_address': device.ip_address,
+            'mac_address': device.mac_address,
+            'status': device.status,
+            'blocked': device.blocked,
+            'last_seen': device.last_seen.isoformat() if device.last_seen else None
+        }, broadcast=True)
+        
+        logging.info(f'Device {device_id} toggled via HTTP. New blocked status: {device.blocked}')
+        return jsonify({'success': True, 'blocked': device.blocked})
+    except Exception as e:
+        logging.error(f'Error toggling device {device_id}: {str(e)}')
+        db.session.rollback()
+        return jsonify({'error': 'Internal server error'}), 500
+
+@app.route('/api/scan', methods=['POST'])
+@jwt_required()
+def scan():
+    logging.info("Scanning for new devices")
+    try:
+        new_devices = scan_network()
+        logging.debug(f"Scan returned {len(new_devices)} devices")
+        for device_data in new_devices:
+            existing_device = Device.query.filter_by(mac_address=device_data['mac_address']).first()
+            if existing_device:
+                logging.debug(f"Updating existing device: {existing_device.name}")
+                existing_device.name = device_data['name']
+                existing_device.ip_address = device_data['ip_address']
+                existing_device.status = device_data['status']
+                existing_device.last_seen = device_data['last_seen']
+            else:
+                logging.debug(f"Adding new device: {device_data['name']}")
+                new_device = Device(
+                    name=device_data['name'],
+                    ip_address=device_data['ip_address'],
+                    mac_address=device_data['mac_address'],
+                    status=device_data['status'],
+                    blocked=device_data['blocked'],
+                    last_seen=device_data['last_seen']
+                )
+                db.session.add(new_device)
+        db.session.commit()
+        
+        # Emit a WebSocket event to notify clients about the new scan results
+        devices = Device.query.all()
+        devices_data = [{
+            'id': device.id,
+            'name': device.name,
+            'ip_address': device.ip_address,
+            'mac_address': device.mac_address,
+            'status': device.status,
+            'blocked': device.blocked,
+            'last_seen': device.last_seen.isoformat() if device.last_seen else None
+        } for device in devices]
+        socketio.emit('devices_update', devices_data, namespace='/')
+        logging.info(f"Emitted 'devices_update' event with {len(devices)} devices")
+        
+        return jsonify({'success': True})
+    except Exception as e:
+        logging.error(f"Error during device scan: {str(e)}")
+        db.session.rollback()
+        return jsonify({'error': 'Internal server error'}), 500
+
+@app.route('/logout')
+def logout():
+    logging.info("User logged out")
+    response = redirect(url_for('login'))
+    # Unset JWT cookies
+    response.delete_cookie('access_token_cookie')
+    return response
+
+@app.errorhandler(404)
+def not_found_error(error):
+    logging.error(f"404 error: {error}")
+    return render_template('404.html'), 404
+
+@app.errorhandler(500)
+def internal_error(error):
+    logging.error(f"500 error: {error}")
+    db.session.rollback()
+    return render_template('500.html'), 500
+
+@socketio.on('connect')
+def handle_connect():
+    try:
+        verify_jwt_in_request()
+        user_id = get_jwt_identity()
+        logging.info(f'User {user_id} connected via WebSocket')
+    except Exception as e:
+        logging.error(f'Unauthenticated user attempted to connect: {str(e)}')
+        return False  # Disconnects the client
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    logging.info('Client disconnected from WebSocket')
+
+@socketio.on('toggle_device')
+def handle_toggle_device(data):
+    try:
+        verify_jwt_in_request()
+        device_id = data.get('device_id')
+        device = Device.query.get_or_404(device_id)
+        device.blocked = not device.blocked
+        db.session.commit()
+        
+        # Emit an event to all connected clients
+        socketio.emit('device_updated', {
+            'id': device.id,
+            'name': device.name,
+            'ip_address': device.ip_address,
+            'mac_address': device.mac_address,
+            'status': device.status,
+            'blocked': device.blocked,
+            'last_seen': device.last_seen.isoformat() if device.last_seen else None
+        }, broadcast=True)
+        
+        logging.info(f'Device {device_id} toggled. New blocked status: {device.blocked}')
+    except Exception as e:
+        logging.error(f'Error handling toggle_device: {str(e)}')
+        socketio.emit('error', {'message': 'Unauthorized or invalid request'})
 --------------------------------------------------
 
 Directory: ./static/
@@ -302,7 +450,71 @@ Directory: ./static/
 File: ./static/css/custom.css
 --------------------------------------------------
 Contents of ./static/css/custom.css:
-/* Add any custom styles here if needed */
+/* custom.css */
+
+/* General Styles */
+body {
+    background-color: var(--bs-dark);
+    color: var(--bs-light);
+}
+
+.container {
+    padding-top: 20px;
+}
+
+/* Navbar */
+.navbar {
+    margin-bottom: 20px;
+    background-color: var(--bs-gray-800) !important;
+}
+
+/* Table */
+.table {
+    background-color: var(--bs-gray-900);
+    color: var(--bs-light);
+}
+
+.table thead th {
+    background-color: var(--bs-gray-800);
+    color: var(--bs-light);
+    border-color: var(--bs-gray-700);
+}
+
+.table tbody tr:hover {
+    background-color: var(--bs-gray-700);
+}
+
+/* Buttons */
+.btn {
+    min-width: 80px;
+}
+
+/* Loading Indicator */
+#loading-indicator {
+    color: var(--bs-primary);
+}
+
+/* Modal */
+.modal-content {
+    background-color: var(--bs-gray-800);
+    color: var(--bs-light);
+}
+
+.modal-header, .modal-footer {
+    border-color: var(--bs-gray-700);
+}
+
+/* Forms */
+.form-control {
+    background-color: var(--bs-gray-700);
+    color: var(--bs-light);
+    border-color: var(--bs-gray-600);
+}
+
+.form-control:focus {
+    background-color: var(--bs-gray-600);
+    color: var(--bs-light);
+}
 
 --------------------------------------------------
 
@@ -312,18 +524,77 @@ Contents of ./static/js/main.js:
 document.addEventListener('DOMContentLoaded', function() {
     const deviceList = document.getElementById('device-list');
     const scanButton = document.getElementById('scan-button');
+    const loadingIndicator = document.getElementById('loading-indicator');
 
     console.log('DOM Content Loaded');
+
+    // Initialize Socket.IO with explicit configuration
+    let socket;
+    try {
+        socket = io({
+            withCredentials: true
+        });
+        console.log('Socket.IO initialized');
+    } catch (error) {
+        console.error('Error initializing Socket.IO:', error);
+    }
+
+    if (socket) {
+        socket.on('connect', function() {
+            console.log('Connected to WebSocket server');
+        });
+
+        socket.on('disconnect', function() {
+            console.log('Disconnected from WebSocket server');
+        });
+
+        socket.on('device_updated', function(device) {
+            console.log('Device update received:', device);
+            updateDeviceInList(device);
+        });
+
+        socket.on('error', function(error) {
+            console.error('WebSocket error:', error);
+        });
+    }
 
     function handleUnauthorized() {
         console.log('Unauthorized access, redirecting to login');
         window.location.href = '/login';
     }
 
+    function showLoading(show) {
+        loadingIndicator.style.display = show ? 'block' : 'none';
+    }
+
+    function updateDeviceInList(device) {
+        console.log('Updating device in list:', device);
+        const row = document.querySelector(`#device-list tr[data-device-id="${device.id}"]`);
+        if (row) {
+            const lastSeen = device.last_seen ? new Date(device.last_seen).toLocaleString() : 'N/A';
+            row.innerHTML = `
+                <td>${device.name}</td>
+                <td>${device.ip_address}</td>
+                <td>${device.mac_address}</td>
+                <td>${device.status ? 'Online' : 'Offline'}</td>
+                <td>${lastSeen}</td>
+                <td>
+                    <button class="btn btn-sm ${device.blocked ? 'btn-danger' : 'btn-success'}" onclick="toggleDevice(${device.id}, '${device.name}', ${device.blocked})">
+                        ${device.blocked ? 'Unblock' : 'Block'}
+                    </button>
+                </td>
+            `;
+        } else {
+            console.log('Device not found in list, reloading all devices');
+            loadDevices();
+        }
+    }
+
     if (deviceList) {
         console.log('Device list found, loading devices');
 
         function loadDevices() {
+            showLoading(true);
             fetch('/api/devices', {
                 method: 'GET',
                 credentials: 'same-origin'
@@ -337,27 +608,14 @@ document.addEventListener('DOMContentLoaded', function() {
                 return response.json();
             })
             .then(devices => {
+                showLoading(false);
                 if (devices) {
                     console.log('Devices loaded:', devices);
-                    deviceList.innerHTML = '';
-                    devices.forEach(device => {
-                        const row = document.createElement('tr');
-                        row.innerHTML = `
-                            <td>${device.name}</td>
-                            <td>${device.ip_address}</td>
-                            <td>${device.mac_address}</td>
-                            <td>${device.status ? 'Online' : 'Offline'}</td>
-                            <td>
-                                <button class="btn btn-sm ${device.blocked ? 'btn-danger' : 'btn-success'}" onclick="toggleDevice(${device.id})">
-                                    ${device.blocked ? 'Unblock' : 'Block'}
-                                </button>
-                            </td>
-                        `;
-                        deviceList.appendChild(row);
-                    });
+                    refreshDeviceList(devices);
                 }
             })
             .catch(error => {
+                showLoading(false);
                 console.error('Error fetching devices:', error);
                 alert('Failed to load devices. Please try again.');
             });
@@ -365,7 +623,29 @@ document.addEventListener('DOMContentLoaded', function() {
 
         loadDevices();
 
-        window.toggleDevice = function(deviceId) {
+        window.toggleDevice = function(deviceId, deviceName, isBlocked) {
+            const action = isBlocked ? 'unblock' : 'block';
+            const modalBody = document.getElementById('confirmModalBody');
+            modalBody.textContent = `Are you sure you want to ${action} the device "${deviceName}"?`;
+
+            const confirmYes = document.getElementById('confirmModalYes');
+            confirmYes.onclick = function() {
+                if (socket && socket.connected) {
+                    socket.emit('toggle_device', { device_id: deviceId });
+                } else {
+                    console.error('WebSocket not connected. Falling back to HTTP request.');
+                    executeToggleDevice(deviceId);
+                }
+                const modal = bootstrap.Modal.getInstance(document.getElementById('confirmModal'));
+                modal.hide();
+            };
+
+            const modal = new bootstrap.Modal(document.getElementById('confirmModal'));
+            modal.show();
+        };
+
+        function executeToggleDevice(deviceId) {
+            showLoading(true);
             fetch(`/api/devices/${deviceId}/toggle`, {
                 method: 'POST',
                 credentials: 'same-origin'
@@ -379,21 +659,24 @@ document.addEventListener('DOMContentLoaded', function() {
                 return response.json();
             })
             .then(data => {
+                showLoading(false);
                 if (data && data.success) {
                     console.log('Device toggled successfully');
-                    loadDevices();
                 } else {
                     throw new Error('Failed to toggle device status');
                 }
             })
             .catch(error => {
+                showLoading(false);
                 console.error('Error toggling device:', error);
                 alert(error.message || 'An error occurred. Please try again.');
             });
-        };
+        }
 
         if (scanButton) {
             scanButton.addEventListener('click', function() {
+                console.log('Scan button clicked');
+                showLoading(true);
                 fetch('/api/scan', {
                     method: 'POST',
                     credentials: 'same-origin'
@@ -407,6 +690,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     return response.json();
                 })
                 .then(data => {
+                    showLoading(false);
                     if (data && data.success) {
                         console.log('Scan completed successfully');
                         loadDevices();
@@ -415,6 +699,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     }
                 })
                 .catch(error => {
+                    showLoading(false);
                     console.error('Error scanning devices:', error);
                     alert(error.message || 'An error occurred while scanning. Please try again.');
                 });
@@ -423,53 +708,33 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
+function refreshDeviceList(devices) {
+    const deviceList = document.getElementById('device-list');
+    deviceList.innerHTML = '';
+    devices.forEach(device => {
+        const row = document.createElement('tr');
+        row.setAttribute('data-device-id', device.id);
+        const lastSeen = device.last_seen ? new Date(device.last_seen).toLocaleString() : 'N/A';
+        row.innerHTML = `
+            <td>${device.name}</td>
+            <td>${device.ip_address}</td>
+            <td>${device.mac_address}</td>
+            <td>${device.status ? 'Online' : 'Offline'}</td>
+            <td>${lastSeen}</td>
+            <td>
+                <button class="btn btn-sm ${device.blocked ? 'btn-danger' : 'btn-success'}" onclick="toggleDevice(${device.id}, '${device.name}', ${device.blocked})">
+                    ${device.blocked ? 'Unblock' : 'Block'}
+                </button>
+            </td>
+        `;
+        deviceList.appendChild(row);
+    });
+}
+
 --------------------------------------------------
 
 Directory: ./templates/
 --------------------------------------------------
-File: ./templates/base.html
---------------------------------------------------
-Contents of ./templates/base.html:
-<!DOCTYPE html>
-<html lang="en" data-bs-theme="dark">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Wi-Fi Network Manager</title>
-    <link rel="stylesheet" href="https://cdn.replit.com/agent/bootstrap-agent-dark-theme.min.css">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/custom.css') }}">
-</head>
-<body>
-    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
-        <div class="container">
-            <a class="navbar-brand" href="/">Wi-Fi Network Manager</a>
-            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
-                <span class="navbar-toggler-icon"></span>
-            </button>
-            <div class="collapse navbar-collapse" id="navbarNav">
-                <ul class="navbar-nav">
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('index') }}">Home</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('devices') }}">Devices</a>
-                    </li>
-                </ul>
-            </div>
-        </div>
-    </nav>
-
-    <div class="container mt-4">
-        {% block content %}{% endblock %}
-    </div>
-
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
-</body>
-</html>
-
---------------------------------------------------
-
 File: ./templates/index.html
 --------------------------------------------------
 Contents of ./templates/index.html:
@@ -510,32 +775,6 @@ Contents of ./templates/register.html:
 
 --------------------------------------------------
 
-File: ./templates/devices.html
---------------------------------------------------
-Contents of ./templates/devices.html:
-{% extends "base.html" %}
-
-{% block content %}
-<h2>Connected Devices</h2>
-<button id="scan-button" class="btn btn-primary mb-3">Scan for new devices</button>
-<table class="table table-striped">
-    <thead>
-        <tr>
-            <th>Name</th>
-            <th>IP Address</th>
-            <th>MAC Address</th>
-            <th>Status</th>
-            <th>Actions</th>
-        </tr>
-    </thead>
-    <tbody id="device-list">
-        <!-- Device list will be populated by JavaScript -->
-    </tbody>
-</table>
-{% endblock %}
-
---------------------------------------------------
-
 File: ./templates/login.html
 --------------------------------------------------
 Contents of ./templates/login.html:
@@ -562,6 +801,101 @@ Contents of ./templates/login.html:
     <button type="submit" class="btn btn-primary">Login</button>
 </form>
 {% endblock %}
+
+--------------------------------------------------
+
+File: ./templates/devices.html
+--------------------------------------------------
+Contents of ./templates/devices.html:
+{% extends "base.html" %}
+
+{% block content %}
+<h2>Connected Devices</h2>
+<button id="scan-button" class="btn btn-primary mb-3">Scan for new devices</button>
+<div id="loading-indicator" class="text-center my-3" style="display: none;">
+    <div class="spinner-border text-primary" role="status">
+        <span class="visually-hidden">Loading...</span>
+    </div>
+</div>
+<table class="table table-striped">
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>IP Address</th>
+            <th>MAC Address</th>
+            <th>Status</th>
+            <th>Last Seen</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody id="device-list">
+        <!-- Device list will be populated by JavaScript -->
+    </tbody>
+</table>
+
+<!-- Confirmation Modal -->
+<div class="modal fade" id="confirmModal" tabindex="-1" aria-labelledby="confirmModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="confirmModalLabel">Confirm Action</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body" id="confirmModalBody">
+        Are you sure you want to proceed?
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary" id="confirmModalYes">Yes</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+--------------------------------------------------
+
+File: ./templates/base.html
+--------------------------------------------------
+Contents of ./templates/base.html:
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wi-Fi Network Manager</title>
+    <link rel="stylesheet" href="https://cdn.replit.com/agent/bootstrap-agent-dark-theme.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/custom.css') }}">
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+        <div class="container">
+            <a class="navbar-brand" href="/">Wi-Fi Network Manager</a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav">
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('index') }}">Home</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('devices') }}">Devices</a>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        {% block content %}{% endblock %}
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js" integrity="sha512-Xm9qbB6Pu06k3PUwPj785dyTl6oHxgsv9nHp7ej7nCpAqGZT3OZpsELuCYX05DdonFpTlBpXMOxjavIAIUwr0w==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>
 
 --------------------------------------------------
 

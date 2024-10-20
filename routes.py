@@ -90,8 +90,7 @@ def toggle_device(device_id):
         device.blocked = not device.blocked
         db.session.commit()
         
-        # Emit WebSocket event
-        socketio.emit('device_updated', {
+        device_data = {
             'id': device.id,
             'name': device.name,
             'ip_address': device.ip_address,
@@ -99,7 +98,13 @@ def toggle_device(device_id):
             'status': device.status,
             'blocked': device.blocked,
             'last_seen': device.last_seen.isoformat() if device.last_seen else None
-        }, broadcast=True)
+        }
+        
+        try:
+            socketio.emit('device_updated', device_data, broadcast=True)
+            logging.info(f'Device {device_id} update emitted via WebSocket')
+        except Exception as ws_error:
+            logging.error(f'Error emitting WebSocket event: {str(ws_error)}')
         
         logging.info(f'Device {device_id} toggled via HTTP. New blocked status: {device.blocked}')
         return jsonify({'success': True, 'blocked': device.blocked})
@@ -136,7 +141,6 @@ def scan():
                 db.session.add(new_device)
         db.session.commit()
         
-        # Emit a WebSocket event to notify clients about the new scan results
         devices = Device.query.all()
         devices_data = [{
             'id': device.id,
@@ -147,8 +151,12 @@ def scan():
             'blocked': device.blocked,
             'last_seen': device.last_seen.isoformat() if device.last_seen else None
         } for device in devices]
-        socketio.emit('devices_update', devices_data, namespace='/')
-        logging.info(f"Emitted 'devices_update' event with {len(devices)} devices")
+        
+        try:
+            socketio.emit('devices_update', devices_data, broadcast=True)
+            logging.info(f"Emitted 'devices_update' event with {len(devices)} devices")
+        except Exception as ws_error:
+            logging.error(f'Error emitting WebSocket event: {str(ws_error)}')
         
         return jsonify({'success': True})
     except Exception as e:
@@ -160,7 +168,6 @@ def scan():
 def logout():
     logging.info("User logged out")
     response = redirect(url_for('login'))
-    # Unset JWT cookies
     response.delete_cookie('access_token_cookie')
     return response
 
@@ -198,8 +205,7 @@ def handle_toggle_device(data):
         device.blocked = not device.blocked
         db.session.commit()
         
-        # Emit an event to all connected clients
-        socketio.emit('device_updated', {
+        device_data = {
             'id': device.id,
             'name': device.name,
             'ip_address': device.ip_address,
@@ -207,7 +213,13 @@ def handle_toggle_device(data):
             'status': device.status,
             'blocked': device.blocked,
             'last_seen': device.last_seen.isoformat() if device.last_seen else None
-        }, broadcast=True)
+        }
+        
+        try:
+            socketio.emit('device_updated', device_data, broadcast=True)
+            logging.info(f'Device {device_id} update emitted via WebSocket')
+        except Exception as ws_error:
+            logging.error(f'Error emitting WebSocket event: {str(ws_error)}')
         
         logging.info(f'Device {device_id} toggled. New blocked status: {device.blocked}')
     except Exception as e:

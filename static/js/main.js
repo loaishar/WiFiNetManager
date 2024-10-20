@@ -7,33 +7,57 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Initialize Socket.IO with explicit configuration
     let socket;
-    try {
-        socket = io({
-            withCredentials: true
-        });
-        console.log('Socket.IO initialized');
-    } catch (error) {
-        console.error('Error initializing Socket.IO:', error);
+    let reconnectAttempts = 0;
+    const maxReconnectAttempts = 5;
+
+    function initializeSocket() {
+        try {
+            socket = io({
+                withCredentials: true,
+                reconnection: true,
+                reconnectionAttempts: maxReconnectAttempts,
+                reconnectionDelay: 1000,
+                reconnectionDelayMax: 5000,
+                timeout: 20000,
+                transports: ['websocket', 'polling']
+            });
+            console.log('Socket.IO initialized');
+
+            socket.on('connect', function() {
+                console.log('Connected to WebSocket server');
+                reconnectAttempts = 0;
+            });
+
+            socket.on('disconnect', function(reason) {
+                console.log('Disconnected from WebSocket server:', reason);
+                if (reason === 'io server disconnect') {
+                    // the disconnection was initiated by the server, you need to reconnect manually
+                    socket.connect();
+                }
+            });
+
+            socket.on('connect_error', function(error) {
+                console.error('Connection error:', error);
+                reconnectAttempts++;
+                if (reconnectAttempts >= maxReconnectAttempts) {
+                    console.error('Max reconnection attempts reached. Please refresh the page.');
+                }
+            });
+
+            socket.on('device_updated', function(device) {
+                console.log('Device update received:', device);
+                updateDeviceInList(device);
+            });
+
+            socket.on('error', function(error) {
+                console.error('WebSocket error:', error);
+            });
+        } catch (error) {
+            console.error('Error initializing Socket.IO:', error);
+        }
     }
 
-    if (socket) {
-        socket.on('connect', function() {
-            console.log('Connected to WebSocket server');
-        });
-
-        socket.on('disconnect', function() {
-            console.log('Disconnected from WebSocket server');
-        });
-
-        socket.on('device_updated', function(device) {
-            console.log('Device update received:', device);
-            updateDeviceInList(device);
-        });
-
-        socket.on('error', function(error) {
-            console.error('WebSocket error:', error);
-        });
-    }
+    initializeSocket();
 
     function handleUnauthorized() {
         console.log('Unauthorized access, redirecting to login');
@@ -108,6 +132,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const confirmYes = document.getElementById('confirmModalYes');
             confirmYes.onclick = function() {
                 if (socket && socket.connected) {
+                    console.log('Emitting toggle_device event via WebSocket');
                     socket.emit('toggle_device', { device_id: deviceId });
                 } else {
                     console.error('WebSocket not connected. Falling back to HTTP request.');
@@ -139,6 +164,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 showLoading(false);
                 if (data && data.success) {
                     console.log('Device toggled successfully');
+                    loadDevices(); // Refresh the device list after toggling
                 } else {
                     throw new Error('Failed to toggle device status');
                 }

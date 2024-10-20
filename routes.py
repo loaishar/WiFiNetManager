@@ -109,7 +109,14 @@ def scan():
                 existing_device.status = device_data['status']
                 existing_device.last_seen = device_data['last_seen']
             else:
-                new_device = Device(**device_data)
+                new_device = Device(
+                    name=device_data['name'],
+                    ip_address=device_data['ip_address'],
+                    mac_address=device_data['mac_address'],
+                    status=device_data['status'],
+                    blocked=device_data['blocked'],
+                    last_seen=device_data['last_seen']
+                )
                 db.session.add(new_device)
         db.session.commit()
         logging.info(f"Scan completed, {len(new_devices)} devices processed")

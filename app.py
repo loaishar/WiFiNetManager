@@ -3,6 +3,7 @@ from flask import Flask, render_template
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.orm import DeclarativeBase
 from flask_jwt_extended import JWTManager, verify_jwt_in_request, get_jwt_identity
+from flask_migrate import Migrate
 import logging
 
 class Base(DeclarativeBase):
@@ -10,6 +11,7 @@ class Base(DeclarativeBase):
 
 db = SQLAlchemy(model_class=Base)
 app = Flask(__name__)
+migrate = Migrate(app, db)
 
 # Setup logging
 logging.basicConfig(

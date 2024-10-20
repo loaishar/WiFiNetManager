@@ -21,4 +21,4 @@ class Device(db.Model):
     mac_address = db.Column(db.String(17), unique=True, nullable=False, index=True)
     status = db.Column(db.Boolean, default=True)
     blocked = db.Column(db.Boolean, default=False)
-    last_seen = db.Column(db.DateTime, default=datetime.utcnow)
+    last_seen = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

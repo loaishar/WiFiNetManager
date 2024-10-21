@@ -1,8 +1,9 @@
-from app import db
+from extensions import db
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
 
 class User(db.Model):
+    __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(64), unique=True, nullable=False)
     email = db.Column(db.String(120), unique=True, nullable=False)
@@ -15,6 +16,7 @@ class User(db.Model):
         return check_password_hash(self.password_hash, password)
 
 class Device(db.Model):
+    __tablename__ = 'devices'
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(128), nullable=False)
     ip_address = db.Column(db.String(45), nullable=False, index=True)

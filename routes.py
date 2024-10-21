@@ -1,19 +1,21 @@
-from flask import render_template, request, jsonify, redirect, url_for, flash
-from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, set_access_cookies, verify_jwt_in_request
-from app import app, db, socketio
+from flask import Blueprint, render_template, request, jsonify, redirect, url_for, flash
+from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, set_access_cookies, verify_jwt_in_request, decode_token
+from extensions import db, jwt, socketio
 from models import User, Device
 from network_scanner import scan_network
 import logging
 from datetime import datetime
 
+main = Blueprint('main', __name__)
+
 logging.basicConfig(level=logging.DEBUG)
 
-@app.route('/')
+@main.route('/')
 def index():
     logging.info("Accessing index route")
     return render_template('index.html')
 
-@app.route('/register', methods=['GET', 'POST'])
+@main.route('/register', methods=['GET', 'POST'])
 def register():
     logging.info("Accessing register route")
     if request.method == 'POST':
@@ -27,7 +29,7 @@ def register():
             db.session.add(user)
             db.session.commit()
             logging.info(f"User {username} registered successfully")
-            return redirect(url_for('login'))
+            return redirect(url_for('main.login'))
         except Exception as e:
             logging.error(f"Error during registration: {str(e)}")
             db.session.rollback()
@@ -35,7 +37,7 @@ def register():
 
     return render_template('register.html')
 
-@app.route('/login', methods=['GET', 'POST'])
+@main.route('/login', methods=['GET', 'POST'])
 def login():
     logging.info("Accessing login route")
     if request.method == 'POST':
@@ -45,7 +47,7 @@ def login():
         user = User.query.filter_by(username=username).first()
         if user and user.check_password(password):
             access_token = create_access_token(identity=user.id)
-            response = redirect(url_for('devices'))
+            response = redirect(url_for('main.devices'))
             set_access_cookies(response, access_token)
             logging.info(f"User {username} logged in successfully")
             return response
@@ -55,14 +57,14 @@ def login():
 
     return render_template('login.html')
 
-@app.route('/devices')
+@main.route('/devices')
 @jwt_required()
 def devices():
     logging.info("Accessing devices route")
     current_user_id = get_jwt_identity()
     return render_template('devices.html')
 
-@app.route('/api/devices', methods=['GET'])
+@main.route('/api/devices', methods=['GET'])
 @jwt_required()
 def get_devices():
     logging.info("Fetching devices")
@@ -82,7 +84,7 @@ def get_devices():
         logging.error(f"Error fetching devices: {str(e)}")
         return jsonify({'error': 'Internal server error'}), 500
 
-@app.route('/api/devices/<int:device_id>/toggle', methods=['POST'])
+@main.route('/api/devices/<int:device_id>/toggle', methods=['POST'])
 @jwt_required()
 def toggle_device(device_id):
     try:
@@ -100,20 +102,15 @@ def toggle_device(device_id):
             'last_seen': device.last_seen.isoformat() if device.last_seen else None
         }
         
-        try:
-            socketio.emit('device_updated', device_data, broadcast=True)
-            logging.info(f'Device {device_id} update emitted via WebSocket')
-        except Exception as ws_error:
-            logging.error(f'Error emitting WebSocket event: {str(ws_error)}')
-        
-        logging.info(f'Device {device_id} toggled via HTTP. New blocked status: {device.blocked}')
+        socketio.emit('device_updated', device_data, broadcast=True)
+        logging.info(f'Device {device_id} toggled. New blocked status: {device.blocked}')
         return jsonify({'success': True, 'blocked': device.blocked})
     except Exception as e:
         logging.error(f'Error toggling device {device_id}: {str(e)}')
         db.session.rollback()
         return jsonify({'error': 'Internal server error'}), 500
 
-@app.route('/api/scan', methods=['POST'])
+@main.route('/api/scan', methods=['POST'])
 @jwt_required()
 def scan():
     logging.info("Scanning for new devices")
@@ -152,11 +149,8 @@ def scan():
             'last_seen': device.last_seen.isoformat() if device.last_seen else None
         } for device in devices]
         
-        try:
-            socketio.emit('devices_update', devices_data, broadcast=True)
-            logging.info(f"Emitted 'devices_update' event with {len(devices)} devices")
-        except Exception as ws_error:
-            logging.error(f'Error emitting WebSocket event: {str(ws_error)}')
+        socketio.emit('devices_update', devices_data, broadcast=True)
+        logging.info(f"Emitted 'devices_update' event with {len(devices)} devices")
         
         return jsonify({'success': True})
     except Exception as e:
@@ -164,33 +158,42 @@ def scan():
         db.session.rollback()
         return jsonify({'error': 'Internal server error'}), 500
 
-@app.route('/logout')
+@main.route('/logout')
 def logout():
     logging.info("User logged out")
-    response = redirect(url_for('login'))
+    response = redirect(url_for('main.login'))
     response.delete_cookie('access_token_cookie')
     return response
-
-@app.errorhandler(404)
-def not_found_error(error):
-    logging.error(f"404 error: {error}")
-    return render_template('404.html'), 404
-
-@app.errorhandler(500)
-def internal_error(error):
-    logging.error(f"500 error: {error}")
-    db.session.rollback()
-    return render_template('500.html'), 500
 
 @socketio.on('connect')
 def handle_connect():
     try:
-        verify_jwt_in_request()
-        user_id = get_jwt_identity()
-        logging.info(f'User {user_id} connected via WebSocket')
+        token = request.args.get('token')
+        if not token:
+            auth = request.headers.get('Authorization')
+            if auth and auth.startswith('Bearer '):
+                token = auth.split(' ')[1]
+        if not token:
+            auth_data = request.args.get('auth')
+            if auth_data:
+                token = auth_data.get('token')
+        if not token:
+            token = request.cookies.get('access_token_cookie')
+
+        if not token:
+            logging.error('No token provided for WebSocket connection')
+            return False
+
+        try:
+            decoded_token = decode_token(token)
+            user_id = decoded_token['sub']
+            logging.info(f'User {user_id} connected via WebSocket')
+        except Exception as e:
+            logging.error(f'Invalid token for WebSocket connection: {str(e)}')
+            return False
     except Exception as e:
-        logging.error(f'Unauthenticated user attempted to connect: {str(e)}')
-        return False  # Disconnects the client
+        logging.error(f'Error during WebSocket connection: {str(e)}')
+        return False
 
 @socketio.on('disconnect')
 def handle_disconnect():
@@ -215,12 +218,7 @@ def handle_toggle_device(data):
             'last_seen': device.last_seen.isoformat() if device.last_seen else None
         }
         
-        try:
-            socketio.emit('device_updated', device_data, broadcast=True)
-            logging.info(f'Device {device_id} update emitted via WebSocket')
-        except Exception as ws_error:
-            logging.error(f'Error emitting WebSocket event: {str(ws_error)}')
-        
+        socketio.emit('device_updated', device_data, broadcast=True)
         logging.info(f'Device {device_id} toggled. New blocked status: {device.blocked}')
     except Exception as e:
         logging.error(f'Error handling toggle_device: {str(e)}')

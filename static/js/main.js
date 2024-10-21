@@ -1,3 +1,9 @@
+function getCookie(name) {
+    const value = `; ${document.cookie}`;
+    const parts = value.split(`; ${name}=`);
+    if (parts.length === 2) return parts.pop().split(';').shift();
+}
+
 document.addEventListener('DOMContentLoaded', function() {
     const deviceList = document.getElementById('device-list');
     const scanButton = document.getElementById('scan-button');
@@ -5,56 +11,46 @@ document.addEventListener('DOMContentLoaded', function() {
 
     console.log('DOM Content Loaded');
 
-    // Initialize Socket.IO with explicit configuration
     let socket;
-    let reconnectAttempts = 0;
-    const maxReconnectAttempts = 5;
 
     function initializeSocket() {
-        try {
-            socket = io({
-                withCredentials: true,
-                reconnection: true,
-                reconnectionAttempts: maxReconnectAttempts,
-                reconnectionDelay: 1000,
-                reconnectionDelayMax: 5000,
-                timeout: 20000,
-                transports: ['websocket', 'polling']
-            });
-            console.log('Socket.IO initialized');
+        console.log('Initializing Socket.IO');
 
-            socket.on('connect', function() {
-                console.log('Connected to WebSocket server');
-                reconnectAttempts = 0;
-            });
+        const token = getCookie('access_token_cookie');
+        socket = io({
+            transports: ['websocket'],
+            auth: {
+                token: token
+            },
+            reconnection: true,
+            reconnectionAttempts: 5
+        });
 
-            socket.on('disconnect', function(reason) {
-                console.log('Disconnected from WebSocket server:', reason);
-                if (reason === 'io server disconnect') {
-                    // the disconnection was initiated by the server, you need to reconnect manually
-                    socket.connect();
-                }
-            });
+        socket.on('connect', function() {
+            console.log('Connected to WebSocket server');
+        });
 
-            socket.on('connect_error', function(error) {
-                console.error('Connection error:', error);
-                reconnectAttempts++;
-                if (reconnectAttempts >= maxReconnectAttempts) {
-                    console.error('Max reconnection attempts reached. Please refresh the page.');
-                }
-            });
+        socket.on('disconnect', function(reason) {
+            console.log('Disconnected from WebSocket server:', reason);
+        });
 
-            socket.on('device_updated', function(device) {
-                console.log('Device update received:', device);
-                updateDeviceInList(device);
-            });
+        socket.on('connect_error', function(error) {
+            console.error('Connection error:', error);
+        });
 
-            socket.on('error', function(error) {
-                console.error('WebSocket error:', error);
-            });
-        } catch (error) {
-            console.error('Error initializing Socket.IO:', error);
-        }
+        socket.on('device_updated', function(device) {
+            console.log('Device update received:', device);
+            updateDeviceInList(device);
+        });
+
+        socket.on('devices_update', function(devices) {
+            console.log('Devices update received:', devices);
+            refreshDeviceList(devices);
+        });
+
+        socket.on('error', function(error) {
+            console.error('WebSocket error:', error);
+        });
     }
 
     initializeSocket();

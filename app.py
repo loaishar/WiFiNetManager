@@ -1,89 +1,55 @@
 import os
-from flask import Flask, render_template
-from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy.orm import DeclarativeBase
-from flask_jwt_extended import JWTManager, verify_jwt_in_request, get_jwt_identity
-from flask_migrate import Migrate
-from flask_socketio import SocketIO
-from flask_cors import CORS
+from flask import Flask
 import logging
 import eventlet
 
 eventlet.monkey_patch()
 
-class Base(DeclarativeBase):
-    pass
+from extensions import db, jwt, socketio, cors
 
-db = SQLAlchemy(model_class=Base)
-app = Flask(__name__)
-CORS(app, supports_credentials=True)
-migrate = Migrate(app, db)
+def create_app():
+    app = Flask(__name__)
 
-# Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
+    # Setup logging
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
 
-# Setup secret key and database
-app.secret_key = os.environ.get("FLASK_SECRET_KEY") or "a secret key"
-app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get("DATABASE_URL")
-app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
-    "pool_recycle": 300,
-    "pool_pre_ping": True,
-}
+    # Setup secret key and database
+    app.secret_key = os.environ.get("FLASK_SECRET_KEY") or "a secret key"
+    app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get("DATABASE_URL")
+    app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
+        "pool_recycle": 300,
+        "pool_pre_ping": True,
+    }
 
-# Setup JWT
-app.config["JWT_SECRET_KEY"] = os.environ.get("FLASK_SECRET_KEY") or "jwt secret key"
-app.config["JWT_TOKEN_LOCATION"] = ["cookies"]
-app.config["JWT_COOKIE_SECURE"] = False  # Set to True in production with HTTPS
-app.config["JWT_COOKIE_CSRF_PROTECT"] = False  # Set to True and implement CSRF protection in production
-jwt = JWTManager(app)
+    # Setup JWT
+    app.config["JWT_SECRET_KEY"] = os.environ.get("FLASK_SECRET_KEY") or "jwt secret key"
+    app.config["JWT_TOKEN_LOCATION"] = ["cookies"]
+    app.config["JWT_COOKIE_SECURE"] = False  # Set to True in production with HTTPS
+    app.config["JWT_COOKIE_CSRF_PROTECT"] = False  # Set to True and implement CSRF protection in production
 
-db.init_app(app)
+    # Initialize extensions
+    db.init_app(app)
+    jwt.init_app(app)
+    cors.init_app(app, supports_credentials=True)
+    socketio.init_app(app, cors_allowed_origins="*", async_mode='eventlet', logger=True, engineio_logger=True)
 
-# Initialize SocketIO with CORS allowed, eventlet, and pingTimeout
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet', logger=True, engineio_logger=True, ping_timeout=60)
+    # Add Socket.IO logging
+    logging.getLogger('socketio').setLevel(logging.DEBUG)
+    logging.getLogger('engineio').setLevel(logging.DEBUG)
 
-with app.app_context():
-    import models
-    db.create_all()
+    with app.app_context():
+        from models import User, Device
+        db.create_all()
 
-from routes import *
+    from routes import main as main_blueprint
+    app.register_blueprint(main_blueprint)
 
-@app.context_processor
-def inject_logged_in():
-    try:
-        verify_jwt_in_request(optional=True)
-        user_id = get_jwt_identity()
-        return {'logged_in': bool(user_id)}
-    except Exception as e:
-        app.logger.error(f"Error in context processor: {str(e)}")
-        return {'logged_in': False}
+    @socketio.on_error_default
+    def default_error_handler(e):
+        app.logger.error(f'An error occurred: {str(e)}')
 
-@app.errorhandler(404)
-def not_found_error(error):
-    app.logger.error(f"404 error: {error}")
-    return render_template('404.html'), 404
-
-@app.errorhandler(500)
-def internal_error(error):
-    app.logger.error(f"500 error: {error}")
-    db.session.rollback()
-    return render_template('500.html'), 500
-
-@socketio.on_error()
-def error_handler(e):
-    app.logger.error(f"SocketIO error: {str(e)}")
-
-@socketio.on('connect')
-def handle_connect():
-    app.logger.info("Client connected to WebSocket")
-
-@socketio.on('disconnect')
-def handle_disconnect():
-    app.logger.info("Client disconnected from WebSocket")
-
-if __name__ == "__main__":
-    socketio.run(app, host="0.0.0.0", port=5000, debug=True)
+    return app

@@ -5,6 +5,7 @@ from models import User, Device
 from network_scanner import scan_network
 import logging
 from datetime import datetime
+from flask_socketio import emit
 
 main = Blueprint('main', __name__)
 
@@ -102,7 +103,7 @@ def toggle_device(device_id):
             'last_seen': device.last_seen.isoformat() if device.last_seen else None
         }
         
-        socketio.emit('device_updated', device_data, broadcast=True)
+        emit('device_updated', device_data, broadcast=True, namespace='/')
         logging.info(f'Device {device_id} toggled. New blocked status: {device.blocked}')
         return jsonify({'success': True, 'blocked': device.blocked})
     except Exception as e:
@@ -149,7 +150,7 @@ def scan():
             'last_seen': device.last_seen.isoformat() if device.last_seen else None
         } for device in devices]
         
-        socketio.emit('devices_update', devices_data, broadcast=True)
+        emit('devices_update', devices_data, broadcast=True, namespace='/')
         logging.info(f"Emitted 'devices_update' event with {len(devices)} devices")
         
         return jsonify({'success': True})
@@ -221,8 +222,8 @@ def handle_toggle_device(data):
             'last_seen': device.last_seen.isoformat() if device.last_seen else None
         }
         
-        socketio.emit('device_updated', device_data, broadcast=True)
+        emit('device_updated', device_data, broadcast=True)
         logging.info(f'Device {device_id} toggled. New blocked status: {device.blocked}')
     except Exception as e:
         logging.error(f'Error handling toggle_device: {str(e)}')
-        socketio.emit('error', {'message': 'Unauthorized or invalid request'})
+        emit('error', {'message': 'Unauthorized or invalid request'})

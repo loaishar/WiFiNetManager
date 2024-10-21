@@ -17,19 +17,13 @@ document.addEventListener('DOMContentLoaded', function() {
         console.log('Initializing Socket.IO');
 
         const token = getCookie('access_token_cookie');
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const host = window.location.hostname;
-        const port = window.location.port || (protocol === 'wss:' ? '443' : '80');
-        const socketUrl = `${protocol}//${host}:${port}`;
+        const socketUrl = window.location.origin;
 
         console.log('Connecting to WebSocket URL:', socketUrl);
 
         socket = io(socketUrl, {
             transports: ['websocket'],
             auth: {
-                token: token
-            },
-            query: {
                 token: token
             }
         });
@@ -64,11 +58,15 @@ document.addEventListener('DOMContentLoaded', function() {
     initializeSocket();
 
     function showLoading() {
-        loadingIndicator.style.display = 'block';
+        if (loadingIndicator) {
+            loadingIndicator.style.display = 'block';
+        }
     }
 
     function hideLoading() {
-        loadingIndicator.style.display = 'none';
+        if (loadingIndicator) {
+            loadingIndicator.style.display = 'none';
+        }
     }
 
     function updateDeviceInList(device) {
@@ -92,24 +90,30 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     function refreshDeviceList(devices) {
-        deviceList.innerHTML = '';
-        devices.forEach(device => {
-            const row = document.createElement('tr');
-            row.id = `device-${device.id}`;
-            row.innerHTML = `
-                <td>${device.name}</td>
-                <td>${device.ip_address}</td>
-                <td>${device.mac_address}</td>
-                <td>${device.status ? 'Online' : 'Offline'}</td>
-                <td>${device.last_seen}</td>
-                <td>
-                    <button class="btn ${device.blocked ? 'btn-success' : 'btn-danger'} btn-sm toggle-device" data-device-id="${device.id}">
-                        ${device.blocked ? 'Unblock' : 'Block'}
-                    </button>
-                </td>
-            `;
-            deviceList.appendChild(row);
-        });
+        if (!deviceList) return;
+        
+        if (devices.length === 0) {
+            deviceList.innerHTML = '<tr><td colspan="6">No devices found. Try scanning for new devices.</td></tr>';
+        } else {
+            deviceList.innerHTML = '';
+            devices.forEach(device => {
+                const row = document.createElement('tr');
+                row.id = `device-${device.id}`;
+                row.innerHTML = `
+                    <td>${device.name}</td>
+                    <td>${device.ip_address}</td>
+                    <td>${device.mac_address}</td>
+                    <td>${device.status ? 'Online' : 'Offline'}</td>
+                    <td>${device.last_seen}</td>
+                    <td>
+                        <button class="btn ${device.blocked ? 'btn-success' : 'btn-danger'} btn-sm toggle-device" data-device-id="${device.id}">
+                            ${device.blocked ? 'Unblock' : 'Block'}
+                        </button>
+                    </td>
+                `;
+                deviceList.appendChild(row);
+            });
+        }
     }
 
     function loadDevices() {
@@ -122,6 +126,9 @@ document.addEventListener('DOMContentLoaded', function() {
             })
             .catch(error => {
                 console.error('Error fetching devices:', error);
+                if (deviceList) {
+                    deviceList.innerHTML = '<tr><td colspan="6">Error loading devices. Please try again.</td></tr>';
+                }
                 hideLoading();
             });
     }
@@ -136,11 +143,17 @@ document.addEventListener('DOMContentLoaded', function() {
                         loadDevices();
                     } else {
                         console.error('Scan failed:', result.error);
+                        if (deviceList) {
+                            deviceList.innerHTML = '<tr><td colspan="6">Scan failed. Please try again.</td></tr>';
+                        }
                     }
                     hideLoading();
                 })
                 .catch(error => {
                     console.error('Error during scan:', error);
+                    if (deviceList) {
+                        deviceList.innerHTML = '<tr><td colspan="6">Error during scan. Please try again.</td></tr>';
+                    }
                     hideLoading();
                 });
         });
@@ -148,12 +161,14 @@ document.addEventListener('DOMContentLoaded', function() {
 
     loadDevices();
 
-    deviceList.addEventListener('click', function(event) {
-        if (event.target.classList.contains('toggle-device')) {
-            const deviceId = event.target.getAttribute('data-device-id');
-            toggleDevice(deviceId);
-        }
-    });
+    if (deviceList) {
+        deviceList.addEventListener('click', function(event) {
+            if (event.target.classList.contains('toggle-device')) {
+                const deviceId = event.target.getAttribute('data-device-id');
+                toggleDevice(deviceId);
+            }
+        });
+    }
 });
 
 function toggleDevice(deviceId) {
@@ -161,12 +176,16 @@ function toggleDevice(deviceId) {
     const confirmModalBody = document.getElementById('confirmModalBody');
     const confirmModalYes = document.getElementById('confirmModalYes');
 
-    confirmModalBody.textContent = 'Are you sure you want to toggle this device?';
+    if (confirmModalBody) {
+        confirmModalBody.textContent = 'Are you sure you want to toggle this device?';
+    }
     
-    confirmModalYes.onclick = function() {
-        confirmModal.hide();
-        executeToggleDevice(deviceId);
-    };
+    if (confirmModalYes) {
+        confirmModalYes.onclick = function() {
+            confirmModal.hide();
+            executeToggleDevice(deviceId);
+        };
+    }
 
     confirmModal.show();
 }

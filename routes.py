@@ -164,9 +164,9 @@ def scan():
         return jsonify({'error': 'Internal server error'}), 500
 
 @main.route('/network_usage')
+@jwt_required()
 def network_usage():
     try:
-        verify_jwt_in_request()
         devices = Device.query.all()
         
         # Calculate total network usage for each device
@@ -211,6 +211,7 @@ def logout():
 
 @socketio.on('connect')
 def handle_connect():
+    logging.info("WebSocket connection attempt")
     try:
         token = None
         auth_header = request.headers.get('Authorization')

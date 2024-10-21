@@ -20,6 +20,8 @@ document.addEventListener('DOMContentLoaded', function() {
     const loadingIndicator = document.getElementById('loading-indicator');
 
     let socket;
+    let reconnectAttempts = 0;
+    const maxReconnectAttempts = 5;
 
     function initializeSocket() {
         console.log('Initializing Socket.IO');
@@ -29,19 +31,33 @@ document.addEventListener('DOMContentLoaded', function() {
 
         console.log('Connecting to WebSocket URL:', socketUrl);
 
+        if (socket && socket.connected) {
+            console.log('Socket already connected. Skipping initialization.');
+            return;
+        }
+
         socket = io(socketUrl, {
             transports: ['websocket'],
             auth: {
                 token: token
-            }
+            },
+            reconnection: false
         });
 
         socket.on('connect', function() {
             console.log('Connected to WebSocket server');
+            reconnectAttempts = 0;
         });
 
         socket.on('disconnect', function(reason) {
             console.log('Disconnected from WebSocket server:', reason);
+            if (reconnectAttempts < maxReconnectAttempts) {
+                reconnectAttempts++;
+                console.log(`Attempting to reconnect (${reconnectAttempts}/${maxReconnectAttempts})`);
+                setTimeout(initializeSocket, 5000);
+            } else {
+                console.error('Max reconnection attempts reached. Please refresh the page.');
+            }
         });
 
         socket.on('connect_error', function(error) {

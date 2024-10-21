@@ -6,6 +6,7 @@ import eventlet
 eventlet.monkey_patch()
 
 from extensions import db, jwt, socketio, cors
+from routes import main as main_blueprint
 
 def create_app():
     app = Flask(__name__)
@@ -45,8 +46,17 @@ def create_app():
         from models import User, Device
         db.create_all()
 
-    from routes import main as main_blueprint
+    # Register the Blueprint
     app.register_blueprint(main_blueprint)
+
+    # Print URL map for debugging
+    print("URL Map:")
+    print(app.url_map)
+
+    # Add a test route
+    @app.route('/test')
+    def test_route():
+        return 'Test Route Working'
 
     @socketio.on_error_default
     def default_error_handler(e):

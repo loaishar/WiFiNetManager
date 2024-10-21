@@ -168,15 +168,16 @@ def logout():
 @socketio.on('connect')
 def handle_connect():
     try:
-        token = request.args.get('token')
+        token = None
+        auth_header = request.headers.get('Authorization')
+        if auth_header and auth_header.startswith('Bearer '):
+            token = auth_header.split(' ')[1]
         if not token:
-            auth = request.headers.get('Authorization')
-            if auth and auth.startswith('Bearer '):
-                token = auth.split(' ')[1]
+            token = request.args.get('token')
         if not token:
-            auth_data = request.args.get('auth')
-            if auth_data:
-                token = auth_data.get('token')
+            auth = request.args.get('auth')
+            if auth:
+                token = auth.get('token')
         if not token:
             token = request.cookies.get('access_token_cookie')
 
@@ -194,6 +195,8 @@ def handle_connect():
     except Exception as e:
         logging.error(f'Error during WebSocket connection: {str(e)}')
         return False
+
+    return True
 
 @socketio.on('disconnect')
 def handle_disconnect():

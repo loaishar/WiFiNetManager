@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h2>Network Usage Analytics</h2>
+<div class="row">
+    <div class="col-md-4">
+        <h3>Devices</h3>
+        <ul class="list-group" id="device-list">
+            {% for device in devices %}
+            <li class="list-group-item d-flex justify-content-between align-items-center">
+                {{ device.name }}
+                <span class="badge bg-primary rounded-pill">{{ (device.data_usage / 1024 / 1024)|round(2) }} MB</span>
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
+    <div class="col-md-8">
+        <h3>Hourly Usage</h3>
+        <canvas id="hourlyUsageChart"></canvas>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+    const deviceList = document.getElementById('device-list');
+    const ctx = document.getElementById('hourlyUsageChart').getContext('2d');
+    let chart;
+
+    deviceList.addEventListener('click', (event) => {
+        const listItem = event.target.closest('li');
+        if (listItem) {
+            const deviceId = listItem.dataset.deviceId;
+            fetchDeviceUsage(deviceId);
+        }
+    });
+
+    function fetchDeviceUsage(deviceId) {
+        fetch(`/api/network_usage/${deviceId}`)
+            .then(response => response.json())
+            .then(data => {
+                updateChart(data);
+            })
+            .catch(error => console.error('Error fetching device usage:', error));
+    }
+
+    function updateChart(data) {
+        const labels = data.map(item => new Date(item[0]).toLocaleString());
+        const usage = data.map(item => item[1] / 1024 / 1024); // Convert bytes to MB
+
+        if (chart) {
+            chart.destroy();
+        }
+
+        chart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Network Usage (MB)',
+                    data: usage,
+                    borderColor: 'rgb(75, 192, 192)',
+                    tension: 0.1
+                }]
+            },
+            options: {
+                responsive: true,
+                scales: {
+                    x: {
+                        type: 'time',
+                        time: {
+                            unit: 'hour'
+                        }
+                    },
+                    y: {
+                        beginAtZero: true,
+                        title: {
+                            display: true,
+                            text: 'Usage (MB)'
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    // Fetch usage for the first device on page load
+    const firstDevice = deviceList.querySelector('li');
+    if (firstDevice) {
+        fetchDeviceUsage(firstDevice.dataset.deviceId);
+    }
+</script>
+{% endblock %}

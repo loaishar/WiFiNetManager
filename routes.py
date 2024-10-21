@@ -1,10 +1,10 @@
-from flask import Blueprint, render_template, request, jsonify, redirect, url_for, flash
-from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, set_access_cookies, verify_jwt_in_request, decode_token
+from flask import Blueprint, render_template, request, jsonify, redirect, url_for, flash, make_response
+from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, set_access_cookies, verify_jwt_in_request, decode_token, unset_jwt_cookies
 from extensions import db, jwt, socketio
-from models import User, Device
+from models import User, Device, NetworkUsage
 from network_scanner import scan_network
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask_socketio import emit
 
 main = Blueprint('main', __name__)
@@ -48,7 +48,7 @@ def login():
         user = User.query.filter_by(username=username).first()
         if user and user.check_password(password):
             access_token = create_access_token(identity=user.id)
-            response = redirect(url_for('main.devices'))
+            response = make_response(redirect(url_for('main.devices')))
             set_access_cookies(response, access_token)
             logging.info(f"User {username} logged in successfully")
             return response
@@ -79,7 +79,8 @@ def get_devices():
             'mac_address': device.mac_address,
             'status': device.status,
             'blocked': device.blocked,
-            'last_seen': device.last_seen.isoformat() if device.last_seen else None
+            'last_seen': device.last_seen.isoformat() if device.last_seen else None,
+            'data_usage': device.data_usage
         } for device in devices])
     except Exception as e:
         logging.error(f"Error fetching devices: {str(e)}")
@@ -100,7 +101,8 @@ def toggle_device(device_id):
             'mac_address': device.mac_address,
             'status': device.status,
             'blocked': device.blocked,
-            'last_seen': device.last_seen.isoformat() if device.last_seen else None
+            'last_seen': device.last_seen.isoformat() if device.last_seen else None,
+            'data_usage': device.data_usage
         }
         
         emit('device_updated', device_data, broadcast=True, namespace='/')
@@ -147,7 +149,8 @@ def scan():
             'mac_address': device.mac_address,
             'status': device.status,
             'blocked': device.blocked,
-            'last_seen': device.last_seen.isoformat() if device.last_seen else None
+            'last_seen': device.last_seen.isoformat() if device.last_seen else None,
+            'data_usage': device.data_usage
         } for device in devices]
         
         emit('devices_update', devices_data, broadcast=True, namespace='/')
@@ -159,11 +162,29 @@ def scan():
         db.session.rollback()
         return jsonify({'error': 'Internal server error'}), 500
 
+@main.route('/network_usage')
+@jwt_required()
+def network_usage():
+    try:
+        verify_jwt_in_request()
+        devices = Device.query.all()
+        return render_template('network_usage.html', devices=devices)
+    except Exception as e:
+        logging.error(f"Error accessing network usage page: {str(e)}")
+        return redirect(url_for('main.login'))
+
+@main.route('/api/network_usage/<int:device_id>')
+@jwt_required()
+def get_network_usage(device_id):
+    device = Device.query.get_or_404(device_id)
+    hourly_usage = device.get_hourly_usage()
+    return jsonify(hourly_usage)
+
 @main.route('/logout')
 def logout():
     logging.info("User logged out")
-    response = redirect(url_for('main.login'))
-    response.delete_cookie('access_token_cookie')
+    response = make_response(redirect(url_for('main.login')))
+    unset_jwt_cookies(response)
     return response
 
 @socketio.on('connect')
@@ -219,7 +240,8 @@ def handle_toggle_device(data):
             'mac_address': device.mac_address,
             'status': device.status,
             'blocked': device.blocked,
-            'last_seen': device.last_seen.isoformat() if device.last_seen else None
+            'last_seen': device.last_seen.isoformat() if device.last_seen else None,
+            'data_usage': device.data_usage
         }
         
         emit('device_updated', device_data, broadcast=True)

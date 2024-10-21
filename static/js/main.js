@@ -4,12 +4,20 @@ function getCookie(name) {
     if (parts.length === 2) return parts.pop().split(';').shift();
 }
 
+function checkAuthentication() {
+    const token = getCookie('access_token_cookie');
+    if (!token) {
+        window.location.href = '/login';
+    }
+}
+
 document.addEventListener('DOMContentLoaded', function() {
+    console.log('DOM Content Loaded');
+    checkAuthentication();
+
     const deviceList = document.getElementById('device-list');
     const scanButton = document.getElementById('scan-button');
     const loadingIndicator = document.getElementById('loading-indicator');
-
-    console.log('DOM Content Loaded');
 
     let socket;
 
@@ -38,20 +46,28 @@ document.addEventListener('DOMContentLoaded', function() {
 
         socket.on('connect_error', function(error) {
             console.error('Connection error:', error.message);
+            if (error.message === 'Unauthorized') {
+                window.location.href = '/login';
+            }
         });
 
         socket.on('device_updated', function(device) {
             console.log('Device update received:', device);
             updateDeviceInList(device);
+            updateNetworkUsage(device);
         });
 
         socket.on('devices_update', function(devices) {
             console.log('Devices update received:', devices);
             refreshDeviceList(devices);
+            updateNetworkUsageList(devices);
         });
 
         socket.on('error', function(error) {
             console.error('WebSocket error:', error);
+            if (error.message === 'Unauthorized') {
+                window.location.href = '/login';
+            }
         });
     }
 
@@ -78,6 +94,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 <td>${device.mac_address}</td>
                 <td>${device.status ? 'Online' : 'Offline'}</td>
                 <td>${device.last_seen}</td>
+                <td>${(device.data_usage / 1024 / 1024).toFixed(2)} MB</td>
                 <td>
                     <button class="btn ${device.blocked ? 'btn-success' : 'btn-danger'} btn-sm toggle-device" data-device-id="${device.id}">
                         ${device.blocked ? 'Unblock' : 'Block'}
@@ -93,7 +110,7 @@ document.addEventListener('DOMContentLoaded', function() {
         if (!deviceList) return;
         
         if (devices.length === 0) {
-            deviceList.innerHTML = '<tr><td colspan="6">No devices found. Try scanning for new devices.</td></tr>';
+            deviceList.innerHTML = '<tr><td colspan="7">No devices found. Try scanning for new devices.</td></tr>';
         } else {
             deviceList.innerHTML = '';
             devices.forEach(device => {
@@ -105,6 +122,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     <td>${device.mac_address}</td>
                     <td>${device.status ? 'Online' : 'Offline'}</td>
                     <td>${device.last_seen}</td>
+                    <td>${(device.data_usage / 1024 / 1024).toFixed(2)} MB</td>
                     <td>
                         <button class="btn ${device.blocked ? 'btn-success' : 'btn-danger'} btn-sm toggle-device" data-device-id="${device.id}">
                             ${device.blocked ? 'Unblock' : 'Block'}
@@ -116,20 +134,54 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
+    function updateNetworkUsage(device) {
+        const usageListItem = document.querySelector(`#device-list li[data-device-id="${device.id}"]`);
+        if (usageListItem) {
+            const usageBadge = usageListItem.querySelector('.badge');
+            usageBadge.textContent = `${(device.data_usage / 1024 / 1024).toFixed(2)} MB`;
+        }
+    }
+
+    function updateNetworkUsageList(devices) {
+        const usageList = document.getElementById('device-list');
+        if (usageList) {
+            usageList.innerHTML = '';
+            devices.forEach(device => {
+                const listItem = document.createElement('li');
+                listItem.className = 'list-group-item d-flex justify-content-between align-items-center';
+                listItem.dataset.deviceId = device.id;
+                listItem.innerHTML = `
+                    ${device.name}
+                    <span class="badge bg-primary rounded-pill">${(device.data_usage / 1024 / 1024).toFixed(2)} MB</span>
+                `;
+                usageList.appendChild(listItem);
+            });
+        }
+    }
+
     function loadDevices() {
         showLoading();
         fetch('/api/devices')
-            .then(response => response.json())
+            .then(response => {
+                if (response.status === 401) {
+                    window.location.href = '/login';
+                    throw new Error('Unauthorized');
+                }
+                return response.json();
+            })
             .then(devices => {
                 refreshDeviceList(devices);
+                updateNetworkUsageList(devices);
                 hideLoading();
             })
             .catch(error => {
                 console.error('Error fetching devices:', error);
-                if (deviceList) {
-                    deviceList.innerHTML = '<tr><td colspan="6">Error loading devices. Please try again.</td></tr>';
+                if (error.message !== 'Unauthorized') {
+                    if (deviceList) {
+                        deviceList.innerHTML = '<tr><td colspan="7">Error loading devices. Please try again.</td></tr>';
+                    }
+                    hideLoading();
                 }
-                hideLoading();
             });
     }
 
@@ -137,24 +189,32 @@ document.addEventListener('DOMContentLoaded', function() {
         scanButton.addEventListener('click', function() {
             showLoading();
             fetch('/api/scan', { method: 'POST' })
-                .then(response => response.json())
+                .then(response => {
+                    if (response.status === 401) {
+                        window.location.href = '/login';
+                        throw new Error('Unauthorized');
+                    }
+                    return response.json();
+                })
                 .then(result => {
                     if (result.success) {
                         loadDevices();
                     } else {
                         console.error('Scan failed:', result.error);
                         if (deviceList) {
-                            deviceList.innerHTML = '<tr><td colspan="6">Scan failed. Please try again.</td></tr>';
+                            deviceList.innerHTML = '<tr><td colspan="7">Scan failed. Please try again.</td></tr>';
                         }
                     }
                     hideLoading();
                 })
                 .catch(error => {
                     console.error('Error during scan:', error);
-                    if (deviceList) {
-                        deviceList.innerHTML = '<tr><td colspan="6">Error during scan. Please try again.</td></tr>';
+                    if (error.message !== 'Unauthorized') {
+                        if (deviceList) {
+                            deviceList.innerHTML = '<tr><td colspan="7">Error during scan. Please try again.</td></tr>';
+                        }
+                        hideLoading();
                     }
-                    hideLoading();
                 });
         });
     }
@@ -192,7 +252,13 @@ function toggleDevice(deviceId) {
 
 function executeToggleDevice(deviceId) {
     fetch(`/api/devices/${deviceId}/toggle`, { method: 'POST' })
-        .then(response => response.json())
+        .then(response => {
+            if (response.status === 401) {
+                window.location.href = '/login';
+                throw new Error('Unauthorized');
+            }
+            return response.json();
+        })
         .then(result => {
             if (result.success) {
                 console.log(`Device ${deviceId} toggled successfully`);

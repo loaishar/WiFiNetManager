@@ -6,6 +6,7 @@ import eventlet
 eventlet.monkey_patch()
 
 from extensions import db, jwt, socketio, cors
+from flask_migrate import Migrate
 from routes import main as main_blueprint
 
 def create_app():
@@ -37,13 +38,16 @@ def create_app():
     jwt.init_app(app)
     cors.init_app(app, supports_credentials=True)
     socketio.init_app(app, cors_allowed_origins="*", async_mode='eventlet', logger=True, engineio_logger=True)
+    
+    # Initialize Flask-Migrate
+    migrate = Migrate(app, db)
 
     # Add Socket.IO logging
     logging.getLogger('socketio').setLevel(logging.DEBUG)
     logging.getLogger('engineio').setLevel(logging.DEBUG)
 
     with app.app_context():
-        from models import User, Device
+        from models import User, Device, NetworkUsage
         db.create_all()
 
     # Register the Blueprint

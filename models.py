@@ -24,3 +24,30 @@ class Device(db.Model):
     status = db.Column(db.Boolean, default=True)
     blocked = db.Column(db.Boolean, default=False)
     last_seen = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    data_usage = db.Column(db.BigInteger, default=0)  # Total data usage in bytes
+    last_usage_update = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def update_data_usage(self, bytes_used):
+        self.data_usage += bytes_used
+        self.last_usage_update = datetime.utcnow()
+        new_usage = NetworkUsage(device_id=self.id, data_used=bytes_used)
+        db.session.add(new_usage)
+
+    def get_hourly_usage(self):
+        hourly_usage = db.session.query(
+            db.func.date_trunc('hour', NetworkUsage.timestamp).label('hour'),
+            db.func.sum(NetworkUsage.data_used).label('total_usage')
+        ).filter(NetworkUsage.device_id == self.id)\
+         .group_by('hour')\
+         .order_by('hour')\
+         .all()
+        return [(usage.hour, usage.total_usage) for usage in hourly_usage]
+
+class NetworkUsage(db.Model):
+    __tablename__ = 'network_usage'
+    id = db.Column(db.Integer, primary_key=True)
+    device_id = db.Column(db.Integer, db.ForeignKey('devices.id'), nullable=False)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+    data_used = db.Column(db.BigInteger)  # Data used in bytes
+
+    device = db.relationship('Device', backref=db.backref('usage_history', lazy='dynamic'))

@@ -6,6 +6,7 @@ from network_scanner import scan_network
 import logging
 from datetime import datetime, timedelta
 from flask_socketio import emit
+from sqlalchemy import func
 
 main = Blueprint('main', __name__)
 
@@ -163,12 +164,33 @@ def scan():
         return jsonify({'error': 'Internal server error'}), 500
 
 @main.route('/network_usage')
-@jwt_required()
 def network_usage():
     try:
         verify_jwt_in_request()
         devices = Device.query.all()
-        return render_template('network_usage.html', devices=devices)
+        
+        # Calculate total network usage for each device
+        for device in devices:
+            device.total_usage = db.session.query(func.sum(NetworkUsage.data_used)).filter(NetworkUsage.device_id == device.id).scalar() or 0
+        
+        # Get overall network usage
+        total_network_usage = sum(device.total_usage for device in devices)
+        
+        # Get hourly usage for the last 24 hours
+        end_time = datetime.utcnow()
+        start_time = end_time - timedelta(days=1)
+        hourly_usage = db.session.query(
+            func.date_trunc('hour', NetworkUsage.timestamp).label('hour'),
+            func.sum(NetworkUsage.data_used).label('usage')
+        ).filter(NetworkUsage.timestamp.between(start_time, end_time)
+        ).group_by('hour').order_by('hour').all()
+        
+        hourly_data = [{'hour': entry.hour.isoformat(), 'usage': entry.usage} for entry in hourly_usage]
+        
+        return render_template('network_usage.html', 
+                               devices=devices, 
+                               total_network_usage=total_network_usage,
+                               hourly_data=hourly_data)
     except Exception as e:
         logging.error(f"Error accessing network usage page: {str(e)}")
         return redirect(url_for('main.login'))

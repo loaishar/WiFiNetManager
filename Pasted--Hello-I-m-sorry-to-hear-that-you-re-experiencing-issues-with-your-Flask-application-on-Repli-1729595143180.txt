@@ -1,0 +1,584 @@
+**Hello!**
+
+I'm sorry to hear that you're experiencing issues with your Flask application on Replit. Based on your description, there are two main problems:
+
+1. **The Flask app is running but not reachable externally.**
+2. **You're receiving a "Token has expired" error when accessing `/network_usage`.**
+
+I'll help you address both issues step by step, ensuring that your application is accessible and functions correctly.
+
+---
+
+## **Issue 1: Flask App Not Reachable Externally**
+
+### **Understanding the Problem**
+
+- **Replit Environment:** Replit may assign a dynamic port for your application to run on, which might not be port `5000`.
+- **Port Exposure:** If your app is bound to the wrong port, it won't be accessible externally.
+- **Firewall or Network Configurations:** These can prevent external access to your app.
+
+### **Solution**
+
+#### **1.1. Adjust the Port Configuration**
+
+Modify your `main.py` to use the port provided by Replit's environment variable `PORT`. This ensures that your app listens on the correct port assigned by Replit.
+
+**Update `main.py`:**
+
+```python
+# main.py
+import os
+from app import create_app
+from extensions import socketio
+
+app = create_app()
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    socketio.run(app, host="0.0.0.0", port=port, debug=True)
+```
+
+**Explanation:**
+
+- **`os.environ.get("PORT", 5000)`:** Fetches the port number from the environment variable `PORT`. If it's not set, it defaults to `5000`.
+- **This change ensures that your app listens on the port that Replit expects.**
+
+#### **1.2. Verify Replit Firewall and Network Settings**
+
+- **Replit automatically handles exposing ports**, so you generally don't need to configure firewalls.
+- **Ensure that your Replit project is set to public** if you want external access.
+
+#### **1.3. Check for Console Errors**
+
+- **Open the Replit console output** to see if there are any errors during startup.
+- **Look for messages indicating that the server is running** and listening on the correct host and port.
+
+---
+
+## **Issue 2: "Token has expired" Error When Accessing `/network_usage`**
+
+### **Understanding the Problem**
+
+- **JWT Tokens:** Your access tokens expire after 15 minutes, as per your configuration.
+- **Token Refresh:** The application needs to refresh the access token using the refresh token when the access token expires.
+- **Client-Side Handling:** The front-end code must handle token expiration and refresh tokens appropriately.
+
+### **Solution**
+
+#### **2.1. Ensure Tokens Are Refreshed Properly**
+
+##### **Server-Side Configuration**
+
+- **Access Token Expiry:** Currently set to 15 minutes.
+- **Refresh Token Expiry:** Set to 30 days.
+
+**In `app.py`:**
+
+```python
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(minutes=15)
+app.config['JWT_REFRESH_TOKEN_EXPIRES'] = timedelta(days=30)
+```
+
+##### **Refresh Endpoint**
+
+Your refresh endpoint seems correctly defined.
+
+**In `routes.py`:**
+
+```python
+@main.route('/refresh', methods=['POST'])
+@jwt_required(refresh=True)
+def refresh():
+    current_user = get_jwt_identity()
+    new_token = create_access_token(identity=current_user)
+    resp = jsonify({'access_token': new_token})
+    set_access_cookies(resp, new_token)
+    return resp, 200
+```
+
+#### **2.2. Update Client-Side Code to Handle Token Refresh**
+
+The current `handleApiError` function in your `main.js` may not be working as intended because:
+
+- **Fetch API Errors:** Unlike Axios, the Fetch API doesn't reject the promise for HTTP errors (like 401 Unauthorized). You need to check the `response.status` manually.
+- **Error Object Structure:** The error object in `catch` may not have the properties you're accessing.
+
+##### **Modify Fetch Calls to Include Credentials**
+
+All fetch requests should include `{ credentials: 'include' }` to send cookies (which contain the JWT tokens) with the request.
+
+**Update fetch calls in `main.js`:**
+
+```javascript
+fetch('/api/devices', { credentials: 'include' })
+```
+
+**Similarly, update all other fetch requests:**
+
+```javascript
+fetch('/api/scan', { method: 'POST', credentials: 'include' })
+fetch(`/api/devices/${deviceId}/toggle`, { method: 'POST', credentials: 'include' })
+```
+
+##### **Update `handleApiError` Function**
+
+Modify the error handling to correctly handle token expiration and refresh the token.
+
+**In `main.js`:**
+
+```javascript
+function handleApiError(response) {
+    if (response.status === 401) {
+        // Token has expired, try to refresh
+        return fetch('/refresh', { method: 'POST', credentials: 'include' })
+            .then(refreshResponse => {
+                if (!refreshResponse.ok) {
+                    throw new Error('Token refresh failed');
+                }
+                return refreshResponse.json();
+            })
+            .then(() => {
+                // Retry the original request
+                return fetch(response.url, {
+                    method: response.config ? response.config.method : 'GET',
+                    credentials: 'include'
+                });
+            })
+            .catch(() => {
+                // If refresh fails, redirect to login
+                window.location.href = '/login';
+            });
+    } else {
+        return Promise.reject(response);
+    }
+}
+```
+
+**However, since the Fetch API doesn't throw an error for HTTP errors, we need to adjust our fetch calls accordingly.**
+
+##### **Update Fetch Calls to Check for 401 Status**
+
+For each fetch call, check if the response status is 401 and handle accordingly.
+
+**Example for `loadDevices()` function:**
+
+```javascript
+function loadDevices() {
+    showLoading();
+    fetch('/api/devices', { credentials: 'include' })
+        .then(response => {
+            if (response.status === 401) {
+                // Token expired, try to refresh
+                return fetch('/refresh', { method: 'POST', credentials: 'include' })
+                    .then(refreshResponse => {
+                        if (!refreshResponse.ok) {
+                            throw new Error('Token refresh failed');
+                        }
+                        return refreshResponse.json();
+                    })
+                    .then(() => {
+                        // Retry the original request
+                        return fetch('/api/devices', { credentials: 'include' });
+                    });
+            }
+            return response;
+        })
+        .then(response => response.json())
+        .then(devices => {
+            refreshDeviceList(devices);
+            hideLoading();
+        })
+        .catch(error => {
+            console.error('Error fetching devices:', error);
+            if (deviceList) {
+                deviceList.innerHTML = '<tr><td colspan="7">Error loading devices. Please try again.</td></tr>';
+            }
+            hideLoading();
+            // Optionally redirect to login
+            window.location.href = '/login';
+        });
+}
+```
+
+**Repeat similar patterns for other fetch calls** (`scan`, `toggleDevice`, etc.).
+
+##### **Extract Token Refresh Logic**
+
+To avoid repeating code, you can create a helper function to handle token refresh and retrying the request.
+
+**In `main.js`:**
+
+```javascript
+function fetchWithAuth(url, options = {}) {
+    options.credentials = 'include';
+
+    return fetch(url, options)
+        .then(response => {
+            if (response.status === 401) {
+                // Token expired, try to refresh
+                return fetch('/refresh', { method: 'POST', credentials: 'include' })
+                    .then(refreshResponse => {
+                        if (!refreshResponse.ok) {
+                            throw new Error('Token refresh failed');
+                        }
+                        return refreshResponse.json();
+                    })
+                    .then(() => {
+                        // Retry the original request after refreshing token
+                        return fetch(url, options);
+                    });
+            }
+            return response;
+        });
+}
+```
+
+**Use `fetchWithAuth` in your functions:**
+
+```javascript
+function loadDevices() {
+    showLoading();
+    fetchWithAuth('/api/devices')
+        .then(response => response.json())
+        .then(devices => {
+            refreshDeviceList(devices);
+            hideLoading();
+        })
+        .catch(error => {
+            console.error('Error fetching devices:', error);
+            if (deviceList) {
+                deviceList.innerHTML = '<tr><td colspan="7">Error loading devices. Please try again.</td></tr>';
+            }
+            hideLoading();
+            window.location.href = '/login';
+        });
+}
+```
+
+**Similarly, update other functions like `scan`, `toggleDevice`, etc.**
+
+#### **2.3. Update Socket.IO Connection Handling**
+
+Your Socket.IO connection might not handle token expiration. Since the access token expires after 15 minutes, you need to ensure that the WebSocket connection can be re-established with a new token.
+
+##### **Update Client-Side Socket Initialization**
+
+In `main.js`, modify the `initializeSocket` function to include logic for reconnecting with a new token if necessary.
+
+**In `main.js`:**
+
+```javascript
+function initializeSocket() {
+    console.log('Initializing Socket.IO');
+
+    const token = getCookie('access_token_cookie');
+    const socketUrl = window.location.origin;
+
+    console.log('Connecting to WebSocket URL:', socketUrl);
+
+    socket = io(socketUrl, {
+        transports: ['websocket'],
+        auth: {
+            token: token
+        },
+        reconnection: true,
+        reconnectionAttempts: 5
+    });
+
+    socket.on('connect', function() {
+        console.log('Connected to WebSocket server');
+    });
+
+    socket.on('disconnect', function(reason) {
+        console.log('Disconnected from WebSocket server:', reason);
+        if (reason === 'io server disconnect') {
+            // The disconnection was initiated by the server, need to reconnect with a new token
+            socket.auth.token = getCookie('access_token_cookie');
+            socket.connect();
+        }
+    });
+
+    socket.on('connect_error', function(error) {
+        console.error('Connection error:', error.message);
+        if (error.message === 'Unauthorized') {
+            // Attempt to refresh the token
+            fetch('/refresh', { method: 'POST', credentials: 'include' })
+                .then(refreshResponse => {
+                    if (!refreshResponse.ok) {
+                        throw new Error('Token refresh failed');
+                    }
+                    return refreshResponse.json();
+                })
+                .then(() => {
+                    // Update the token and reconnect
+                    socket.auth.token = getCookie('access_token_cookie');
+                    socket.connect();
+                })
+                .catch(() => {
+                    window.location.href = '/login';
+                });
+        }
+    });
+
+    // ... rest of your socket event handlers ...
+}
+```
+
+##### **Update Server-Side Socket Authentication**
+
+In `routes.py`, make sure your `handle_connect` function correctly handles token validation.
+
+**In `routes.py`:**
+
+```python
+@socketio.on('connect')
+def handle_connect():
+    logging.info("WebSocket connection attempt")
+    try:
+        token = request.args.get('token') or request.headers.get('Authorization')
+        if not token:
+            if request.namespace:
+                auth_data = request.namespace.socketio_server.environ[request.sid]['auth']
+                token = auth_data.get('token')
+        if not token:
+            token = request.cookies.get('access_token_cookie')
+
+        if not token:
+            logging.error('No token provided for WebSocket connection')
+            return False
+
+        try:
+            decoded_token = decode_token(token)
+            user_id = decoded_token['sub']
+            logging.info(f'User {user_id} connected via WebSocket')
+        except Exception as e:
+            logging.error(f'Invalid token for WebSocket connection: {str(e)}')
+            return False
+    except Exception as e:
+        logging.error(f'Error during WebSocket connection: {str(e)}')
+        return False
+
+    return True
+```
+
+**Note:** The method of accessing the token may vary depending on the versions of Flask and Flask-SocketIO. Adjust the code as needed to correctly extract the token.
+
+#### **2.4. Increase Access Token Expiry Time (Optional)**
+
+As an alternative, you may consider increasing the access token expiry time to reduce the frequency of token refreshes.
+
+**In `app.py`:**
+
+```python
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=1)  # Increase to 1 hour
+```
+
+---
+
+## **Additional Recommendations**
+
+### **3. Check the Database Configuration**
+
+Ensure that your database is properly configured and accessible. Since you're using Replit, you may need to adjust the database URI.
+
+**In `app.py`:**
+
+```python
+app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get("DATABASE_URL") or "sqlite:///database.db"
+```
+
+- **If `DATABASE_URL` is not set**, it will default to using a local SQLite database.
+
+### **4. Verify Network Usage Page**
+
+Ensure that the `/network_usage` route is correctly protected and the template is rendering properly.
+
+**In `routes.py`:**
+
+```python
+@main.route('/network_usage')
+@jwt_required()
+def network_usage():
+    # Existing code...
+```
+
+- **If the token has expired**, the `@jwt_required()` decorator will prevent access and return a 401 error.
+- **Ensure that the client handles this and attempts to refresh the token.**
+
+### **5. Test the Application Locally**
+
+If possible, run your application locally to ensure that it works outside of Replit. This can help identify whether the issues are due to Replit's environment or your code.
+
+---
+
+## **Summary of Steps**
+
+1. **Adjust the port configuration in `main.py`** to use the port provided by Replit's environment variable.
+2. **Update all fetch calls in your client-side code** to include `{ credentials: 'include' }`.
+3. **Modify the error handling in your client-side code** to correctly handle token expiration and refresh tokens.
+4. **Update the Socket.IO connection handling** to manage token expiration and reconnection.
+5. **Ensure that the server-side code for token validation** is correctly extracting and verifying tokens.
+6. **Optionally increase the access token expiry time** to reduce the need for frequent token refreshes.
+7. **Test the application** thoroughly to ensure that the changes have resolved the issues.
+
+---
+
+## **Final Code Adjustments**
+
+### **`main.py`**
+
+```python
+import os
+from app import create_app
+from extensions import socketio
+
+app = create_app()
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    socketio.run(app, host="0.0.0.0", port=port, debug=True)
+```
+
+### **Client-Side Fetch Helper (`main.js`)**
+
+```javascript
+function fetchWithAuth(url, options = {}) {
+    options.credentials = 'include';
+
+    return fetch(url, options)
+        .then(response => {
+            if (response.status === 401) {
+                // Token expired, try to refresh
+                return fetch('/refresh', { method: 'POST', credentials: 'include' })
+                    .then(refreshResponse => {
+                        if (!refreshResponse.ok) {
+                            throw new Error('Token refresh failed');
+                        }
+                        return refreshResponse.json();
+                    })
+                    .then(() => {
+                        // Retry the original request after refreshing token
+                        return fetch(url, options);
+                    });
+            }
+            return response;
+        });
+}
+```
+
+### **Update Fetch Calls in `main.js`**
+
+**Example:**
+
+```javascript
+function loadDevices() {
+    showLoading();
+    fetchWithAuth('/api/devices')
+        .then(response => response.json())
+        .then(devices => {
+            refreshDeviceList(devices);
+            hideLoading();
+        })
+        .catch(error => {
+            console.error('Error fetching devices:', error);
+            if (deviceList) {
+                deviceList.innerHTML = '<tr><td colspan="7">Error loading devices. Please try again.</td></tr>';
+            }
+            hideLoading();
+            window.location.href = '/login';
+        });
+}
+```
+
+**Similarly update other functions.**
+
+### **Update Socket.IO Initialization in `main.js`**
+
+```javascript
+function initializeSocket() {
+    // ... existing code ...
+
+    socket.on('disconnect', function(reason) {
+        // ... existing code ...
+        if (reason === 'io server disconnect') {
+            // The disconnection was initiated by the server, need to reconnect with a new token
+            socket.auth.token = getCookie('access_token_cookie');
+            socket.connect();
+        }
+    });
+
+    socket.on('connect_error', function(error) {
+        // ... existing code ...
+        if (error.message === 'Unauthorized') {
+            fetch('/refresh', { method: 'POST', credentials: 'include' })
+                .then(refreshResponse => {
+                    if (!refreshResponse.ok) {
+                        throw new Error('Token refresh failed');
+                    }
+                    return refreshResponse.json();
+                })
+                .then(() => {
+                    socket.auth.token = getCookie('access_token_cookie');
+                    socket.connect();
+                })
+                .catch(() => {
+                    window.location.href = '/login';
+                });
+        }
+    });
+
+    // ... rest of your socket event handlers ...
+}
+```
+
+### **Ensure All Fetch Calls Include Credentials**
+
+```javascript
+fetch('/api/scan', { method: 'POST', credentials: 'include' })
+fetch(`/api/devices/${deviceId}/toggle`, { method: 'POST', credentials: 'include' })
+```
+
+---
+
+## **Testing and Verification**
+
+1. **Run the Application:**
+
+   - Start your Flask application on Replit.
+   - Ensure that it binds to the correct port and host.
+
+2. **Access the Application Externally:**
+
+   - Use the URL provided by Replit to access your app.
+   - Verify that you can reach the login page.
+
+3. **Test User Authentication:**
+
+   - Register a new user or use existing credentials.
+   - Log in to the application.
+
+4. **Test Token Expiration Handling:**
+
+   - Wait for the access token to expire (you can temporarily set a shorter expiry time for testing).
+   - Try accessing protected routes or performing actions.
+   - Verify that the application refreshes the token and continues functioning without forcing a logout.
+
+5. **Test Real-Time Updates:**
+
+   - Perform actions that trigger Socket.IO events (e.g., toggling device status).
+   - Ensure that updates appear in real-time without refreshing the page.
+
+6. **Monitor Console Output:**
+
+   - Check the browser's developer console for any errors or warnings.
+   - Observe the server logs in Replit for any exceptions or errors.
+
+---
+
+## **Conclusion**
+
+By following these steps, you should resolve the issues with your Flask application not being accessible externally and the "Token has expired" error. Ensuring that your client-side code correctly handles token expiration and refreshes the token when needed is crucial for a seamless user experience.
+
+---
+
+**If you have any questions or need further assistance, please don't hesitate to ask. I'm here to help you get your application running smoothly!**

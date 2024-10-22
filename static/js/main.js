@@ -11,6 +11,35 @@ function checkAuthentication() {
     }
 }
 
+function handleApiError(error) {
+    if (error.response && error.response.status === 401) {
+        // Token has expired, try to refresh
+        return fetch('/refresh', { method: 'POST', credentials: 'include' })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Token refresh failed');
+                }
+                return response.json();
+            })
+            .then(data => {
+                // Update the token in cookies
+                document.cookie = `access_token_cookie=${data.access_token}; path=/; max-age=3600; SameSite=Lax`;
+                // Retry the original request
+                return fetch(error.config.url, {
+                    method: error.config.method,
+                    headers: {
+                        'Authorization': `Bearer ${data.access_token}`
+                    }
+                });
+            })
+            .catch(() => {
+                // If refresh fails, redirect to login
+                window.location.href = '/login';
+            });
+    }
+    return Promise.reject(error);
+}
+
 document.addEventListener('DOMContentLoaded', function() {
     console.log('DOM Content Loaded');
     checkAuthentication();
@@ -20,8 +49,6 @@ document.addEventListener('DOMContentLoaded', function() {
     const loadingIndicator = document.getElementById('loading-indicator');
 
     let socket;
-    let reconnectAttempts = 0;
-    const maxReconnectAttempts = 5;
 
     function initializeSocket() {
         console.log('Initializing Socket.IO');
@@ -31,33 +58,21 @@ document.addEventListener('DOMContentLoaded', function() {
 
         console.log('Connecting to WebSocket URL:', socketUrl);
 
-        if (socket && socket.connected) {
-            console.log('Socket already connected. Skipping initialization.');
-            return;
-        }
-
         socket = io(socketUrl, {
             transports: ['websocket'],
             auth: {
                 token: token
             },
-            reconnection: false
+            reconnection: true,
+            reconnectionAttempts: 5
         });
 
         socket.on('connect', function() {
             console.log('Connected to WebSocket server');
-            reconnectAttempts = 0;
         });
 
         socket.on('disconnect', function(reason) {
             console.log('Disconnected from WebSocket server:', reason);
-            if (reconnectAttempts < maxReconnectAttempts) {
-                reconnectAttempts++;
-                console.log(`Attempting to reconnect (${reconnectAttempts}/${maxReconnectAttempts})`);
-                setTimeout(initializeSocket, 5000);
-            } else {
-                console.error('Max reconnection attempts reached. Please refresh the page.');
-            }
         });
 
         socket.on('connect_error', function(error) {
@@ -70,13 +85,11 @@ document.addEventListener('DOMContentLoaded', function() {
         socket.on('device_updated', function(device) {
             console.log('Device update received:', device);
             updateDeviceInList(device);
-            updateNetworkUsage(device);
         });
 
         socket.on('devices_update', function(devices) {
             console.log('Devices update received:', devices);
             refreshDeviceList(devices);
-            updateNetworkUsageList(devices);
         });
 
         socket.on('error', function(error) {
@@ -150,54 +163,36 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    function updateNetworkUsage(device) {
-        const usageListItem = document.querySelector(`#device-list li[data-device-id="${device.id}"]`);
-        if (usageListItem) {
-            const usageBadge = usageListItem.querySelector('.badge');
-            usageBadge.textContent = `${(device.data_usage / 1024 / 1024).toFixed(2)} MB`;
-        }
-    }
-
-    function updateNetworkUsageList(devices) {
-        const usageList = document.getElementById('device-list');
-        if (usageList) {
-            usageList.innerHTML = '';
-            devices.forEach(device => {
-                const listItem = document.createElement('li');
-                listItem.className = 'list-group-item d-flex justify-content-between align-items-center';
-                listItem.dataset.deviceId = device.id;
-                listItem.innerHTML = `
-                    ${device.name}
-                    <span class="badge bg-primary rounded-pill">${(device.data_usage / 1024 / 1024).toFixed(2)} MB</span>
-                `;
-                usageList.appendChild(listItem);
-            });
-        }
-    }
-
     function loadDevices() {
         showLoading();
         fetch('/api/devices')
             .then(response => {
-                if (response.status === 401) {
-                    window.location.href = '/login';
-                    throw new Error('Unauthorized');
+                if (!response.ok) {
+                    throw response;
                 }
                 return response.json();
             })
             .then(devices => {
                 refreshDeviceList(devices);
-                updateNetworkUsageList(devices);
                 hideLoading();
+            })
+            .catch(handleApiError)
+            .then(retryResponse => {
+                if (retryResponse) {
+                    return retryResponse.json();
+                }
+            })
+            .then(retriedDevices => {
+                if (retriedDevices) {
+                    refreshDeviceList(retriedDevices);
+                }
             })
             .catch(error => {
                 console.error('Error fetching devices:', error);
-                if (error.message !== 'Unauthorized') {
-                    if (deviceList) {
-                        deviceList.innerHTML = '<tr><td colspan="7">Error loading devices. Please try again.</td></tr>';
-                    }
-                    hideLoading();
+                if (deviceList) {
+                    deviceList.innerHTML = '<tr><td colspan="7">Error loading devices. Please try again.</td></tr>';
                 }
+                hideLoading();
             });
     }
 
@@ -206,9 +201,8 @@ document.addEventListener('DOMContentLoaded', function() {
             showLoading();
             fetch('/api/scan', { method: 'POST' })
                 .then(response => {
-                    if (response.status === 401) {
-                        window.location.href = '/login';
-                        throw new Error('Unauthorized');
+                    if (!response.ok) {
+                        throw response;
                     }
                     return response.json();
                 })
@@ -223,14 +217,23 @@ document.addEventListener('DOMContentLoaded', function() {
                     }
                     hideLoading();
                 })
+                .catch(handleApiError)
+                .then(retryResponse => {
+                    if (retryResponse) {
+                        return retryResponse.json();
+                    }
+                })
+                .then(retriedResult => {
+                    if (retriedResult && retriedResult.success) {
+                        loadDevices();
+                    }
+                })
                 .catch(error => {
                     console.error('Error during scan:', error);
-                    if (error.message !== 'Unauthorized') {
-                        if (deviceList) {
-                            deviceList.innerHTML = '<tr><td colspan="7">Error during scan. Please try again.</td></tr>';
-                        }
-                        hideLoading();
+                    if (deviceList) {
+                        deviceList.innerHTML = '<tr><td colspan="7">Error during scan. Please try again.</td></tr>';
                     }
+                    hideLoading();
                 });
         });
     }
@@ -248,30 +251,10 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 function toggleDevice(deviceId) {
-    const confirmModal = new bootstrap.Modal(document.getElementById('confirmModal'));
-    const confirmModalBody = document.getElementById('confirmModalBody');
-    const confirmModalYes = document.getElementById('confirmModalYes');
-
-    if (confirmModalBody) {
-        confirmModalBody.textContent = 'Are you sure you want to toggle this device?';
-    }
-    
-    if (confirmModalYes) {
-        confirmModalYes.onclick = function() {
-            confirmModal.hide();
-            executeToggleDevice(deviceId);
-        };
-    }
-
-    confirmModal.show();
-}
-
-function executeToggleDevice(deviceId) {
     fetch(`/api/devices/${deviceId}/toggle`, { method: 'POST' })
         .then(response => {
-            if (response.status === 401) {
-                window.location.href = '/login';
-                throw new Error('Unauthorized');
+            if (!response.ok) {
+                throw response;
             }
             return response.json();
         })
@@ -280,6 +263,17 @@ function executeToggleDevice(deviceId) {
                 console.log(`Device ${deviceId} toggled successfully`);
             } else {
                 console.error('Error toggling device:', result.error);
+            }
+        })
+        .catch(handleApiError)
+        .then(retryResponse => {
+            if (retryResponse) {
+                return retryResponse.json();
+            }
+        })
+        .then(retriedResult => {
+            if (retriedResult && retriedResult.success) {
+                console.log(`Device ${deviceId} toggled successfully after retry`);
             }
         })
         .catch(error => {

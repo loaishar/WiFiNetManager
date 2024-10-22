@@ -1,5 +1,8 @@
 from flask import Blueprint, render_template, request, jsonify, redirect, url_for, flash, make_response
-from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, set_access_cookies, verify_jwt_in_request, decode_token, unset_jwt_cookies
+from flask_jwt_extended import (
+    create_access_token, create_refresh_token, jwt_required, get_jwt_identity,
+    set_access_cookies, set_refresh_cookies, verify_jwt_in_request, decode_token, unset_jwt_cookies
+)
 from extensions import db, jwt, socketio
 from models import User, Device, NetworkUsage
 from network_scanner import scan_network
@@ -49,9 +52,11 @@ def login():
         user = User.query.filter_by(username=username).first()
         if user and user.check_password(password):
             access_token = create_access_token(identity=user.id)
+            refresh_token = create_refresh_token(identity=user.id)
             response = make_response(redirect(url_for('main.devices')))
             set_access_cookies(response, access_token)
-            logging.info(f"User {username} logged in successfully")
+            set_refresh_cookies(response, refresh_token)
+            logging.info(f"User {username} logged in successfully. Access token: {access_token}")
             return response
         else:
             logging.warning(f"Failed login attempt for user {username}")
@@ -59,11 +64,19 @@ def login():
 
     return render_template('login.html')
 
+@main.route('/refresh', methods=['POST'])
+@jwt_required(refresh=True)
+def refresh():
+    current_user = get_jwt_identity()
+    new_token = create_access_token(identity=current_user)
+    resp = jsonify({'access_token': new_token})
+    set_access_cookies(resp, new_token)
+    return resp, 200
+
 @main.route('/devices')
 @jwt_required()
 def devices():
     logging.info("Accessing devices route")
-    current_user_id = get_jwt_identity()
     return render_template('devices.html')
 
 @main.route('/api/devices', methods=['GET'])
@@ -167,6 +180,8 @@ def scan():
 @jwt_required()
 def network_usage():
     try:
+        verify_jwt_in_request()
+        logging.info("Accessing network usage page")
         devices = Device.query.all()
         
         # Calculate total network usage for each device
@@ -213,16 +228,11 @@ def logout():
 def handle_connect():
     logging.info("WebSocket connection attempt")
     try:
-        token = None
-        auth_header = request.headers.get('Authorization')
-        if auth_header and auth_header.startswith('Bearer '):
-            token = auth_header.split(' ')[1]
+        token = request.args.get('token') or request.headers.get('Authorization')
         if not token:
-            token = request.args.get('token')
-        if not token:
-            auth = request.args.get('auth')
-            if auth:
-                token = auth.get('token')
+            auth_data = request.args.get('auth')
+            if isinstance(auth_data, dict):
+                token = auth_data.get('token')
         if not token:
             token = request.cookies.get('access_token_cookie')
 

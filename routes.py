@@ -72,6 +72,7 @@ def refresh():
         new_access_token = create_access_token(identity=current_user)
         resp = jsonify({'access_token': new_access_token})
         set_access_cookies(resp, new_access_token)
+        logging.info(f"Token refreshed for user {current_user}")
         return resp, 200
     except Exception as e:
         logging.error(f"Error refreshing token: {str(e)}")
@@ -89,12 +90,16 @@ def logout():
 @jwt_required()
 def devices():
     logging.info("Accessing devices route")
+    current_user = get_jwt_identity()
+    logging.info(f"User {current_user} accessing devices page")
     return render_template('devices.html')
 
 @main.route('/api/devices', methods=['GET'])
 @jwt_required()
 def get_devices():
     logging.info("Fetching devices")
+    current_user = get_jwt_identity()
+    logging.info(f"User {current_user} fetching devices")
     try:
         devices = Device.query.all()
         logging.debug(f"Found {len(devices)} devices")
@@ -115,6 +120,8 @@ def get_devices():
 @main.route('/api/devices/<int:device_id>/toggle', methods=['POST'])
 @jwt_required()
 def toggle_device(device_id):
+    current_user = get_jwt_identity()
+    logging.info(f"User {current_user} toggling device {device_id}")
     try:
         device = Device.query.get_or_404(device_id)
         device.blocked = not device.blocked
@@ -142,7 +149,8 @@ def toggle_device(device_id):
 @main.route('/api/scan', methods=['POST'])
 @jwt_required()
 def scan():
-    logging.info("Scanning for new devices")
+    current_user = get_jwt_identity()
+    logging.info(f"User {current_user} scanning for new devices")
     try:
         new_devices = scan_network()
         logging.debug(f"Scan returned {len(new_devices)} devices")
@@ -192,7 +200,8 @@ def scan():
 @jwt_required()
 def network_usage():
     try:
-        logging.info("Accessing network usage page")
+        current_user = get_jwt_identity()
+        logging.info(f"User {current_user} accessing network usage page")
         devices = Device.query.all()
         
         for device in devices:
@@ -222,6 +231,8 @@ def network_usage():
 @jwt_required()
 def get_network_usage():
     try:
+        current_user = get_jwt_identity()
+        logging.info(f"User {current_user} fetching network usage data")
         end_time = datetime.utcnow()
         start_time = end_time - timedelta(days=1)
         hourly_usage = db.session.query(
@@ -274,7 +285,9 @@ def handle_disconnect():
 @jwt_required()
 def handle_toggle_device(data):
     try:
+        current_user = get_jwt_identity()
         device_id = data.get('device_id')
+        logging.info(f"User {current_user} toggling device {device_id} via WebSocket")
         device = Device.query.get_or_404(device_id)
         device.blocked = not device.blocked
         db.session.commit()

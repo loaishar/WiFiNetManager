@@ -40,8 +40,6 @@ function fetchWithAuth(url, options = {}) {
                     })
                     .then(data => {
                         console.log('Token refreshed successfully');
-                        options.headers = options.headers || {};
-                        options.headers['Authorization'] = `Bearer ${data.access_token}`;
                         return fetch(url, options);
                     })
                     .catch(refreshError => {

@@ -11,33 +11,27 @@ function checkAuthentication() {
     }
 }
 
-function handleApiError(error) {
-    if (error.response && error.response.status === 401) {
-        // Token has expired, try to refresh
-        return fetch('/refresh', { method: 'POST', credentials: 'include' })
-            .then(response => {
-                if (!response.ok) {
-                    throw new Error('Token refresh failed');
-                }
-                return response.json();
-            })
-            .then(data => {
-                // Update the token in cookies
-                document.cookie = `access_token_cookie=${data.access_token}; path=/; max-age=3600; SameSite=Lax`;
-                // Retry the original request
-                return fetch(error.config.url, {
-                    method: error.config.method,
-                    headers: {
-                        'Authorization': `Bearer ${data.access_token}`
-                    }
-                });
-            })
-            .catch(() => {
-                // If refresh fails, redirect to login
-                window.location.href = '/login';
-            });
-    }
-    return Promise.reject(error);
+function fetchWithAuth(url, options = {}) {
+    options.credentials = 'include';
+
+    return fetch(url, options)
+        .then(response => {
+            if (response.status === 401) {
+                // Token expired, try to refresh
+                return fetch('/refresh', { method: 'POST', credentials: 'include' })
+                    .then(refreshResponse => {
+                        if (!refreshResponse.ok) {
+                            throw new Error('Token refresh failed');
+                        }
+                        return refreshResponse.json();
+                    })
+                    .then(() => {
+                        // Retry the original request after refreshing token
+                        return fetch(url, options);
+                    });
+            }
+            return response;
+        });
 }
 
 document.addEventListener('DOMContentLoaded', function() {
@@ -73,12 +67,32 @@ document.addEventListener('DOMContentLoaded', function() {
 
         socket.on('disconnect', function(reason) {
             console.log('Disconnected from WebSocket server:', reason);
+            if (reason === 'io server disconnect') {
+                // The disconnection was initiated by the server, need to reconnect with a new token
+                socket.auth.token = getCookie('access_token_cookie');
+                socket.connect();
+            }
         });
 
         socket.on('connect_error', function(error) {
             console.error('Connection error:', error.message);
             if (error.message === 'Unauthorized') {
-                window.location.href = '/login';
+                // Attempt to refresh the token
+                fetch('/refresh', { method: 'POST', credentials: 'include' })
+                    .then(refreshResponse => {
+                        if (!refreshResponse.ok) {
+                            throw new Error('Token refresh failed');
+                        }
+                        return refreshResponse.json();
+                    })
+                    .then(() => {
+                        // Update the token and reconnect
+                        socket.auth.token = getCookie('access_token_cookie');
+                        socket.connect();
+                    })
+                    .catch(() => {
+                        window.location.href = '/login';
+                    });
             }
         });
 
@@ -165,27 +179,11 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function loadDevices() {
         showLoading();
-        fetch('/api/devices')
-            .then(response => {
-                if (!response.ok) {
-                    throw response;
-                }
-                return response.json();
-            })
+        fetchWithAuth('/api/devices')
+            .then(response => response.json())
             .then(devices => {
                 refreshDeviceList(devices);
                 hideLoading();
-            })
-            .catch(handleApiError)
-            .then(retryResponse => {
-                if (retryResponse) {
-                    return retryResponse.json();
-                }
-            })
-            .then(retriedDevices => {
-                if (retriedDevices) {
-                    refreshDeviceList(retriedDevices);
-                }
             })
             .catch(error => {
                 console.error('Error fetching devices:', error);
@@ -199,13 +197,8 @@ document.addEventListener('DOMContentLoaded', function() {
     if (scanButton) {
         scanButton.addEventListener('click', function() {
             showLoading();
-            fetch('/api/scan', { method: 'POST' })
-                .then(response => {
-                    if (!response.ok) {
-                        throw response;
-                    }
-                    return response.json();
-                })
+            fetchWithAuth('/api/scan', { method: 'POST' })
+                .then(response => response.json())
                 .then(result => {
                     if (result.success) {
                         loadDevices();
@@ -216,17 +209,6 @@ document.addEventListener('DOMContentLoaded', function() {
                         }
                     }
                     hideLoading();
-                })
-                .catch(handleApiError)
-                .then(retryResponse => {
-                    if (retryResponse) {
-                        return retryResponse.json();
-                    }
-                })
-                .then(retriedResult => {
-                    if (retriedResult && retriedResult.success) {
-                        loadDevices();
-                    }
                 })
                 .catch(error => {
                     console.error('Error during scan:', error);
@@ -248,32 +230,58 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     }
+
+    // Network Usage Chart
+    const ctx = document.getElementById('networkUsageChart');
+    if (ctx) {
+        fetchWithAuth('/api/network_usage')
+            .then(response => response.json())
+            .then(data => {
+                new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: data.labels,
+                        datasets: [{
+                            label: 'Network Usage (MB)',
+                            data: data.values,
+                            borderColor: 'rgb(75, 192, 192)',
+                            tension: 0.1
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        scales: {
+                            x: {
+                                title: {
+                                    display: true,
+                                    text: 'Time'
+                                }
+                            },
+                            y: {
+                                title: {
+                                    display: true,
+                                    text: 'Usage (MB)'
+                                },
+                                beginAtZero: true
+                            }
+                        }
+                    }
+                });
+            })
+            .catch(error => {
+                console.error('Error fetching network usage data:', error);
+            });
+    }
 });
 
 function toggleDevice(deviceId) {
-    fetch(`/api/devices/${deviceId}/toggle`, { method: 'POST' })
-        .then(response => {
-            if (!response.ok) {
-                throw response;
-            }
-            return response.json();
-        })
+    fetchWithAuth(`/api/devices/${deviceId}/toggle`, { method: 'POST' })
+        .then(response => response.json())
         .then(result => {
             if (result.success) {
                 console.log(`Device ${deviceId} toggled successfully`);
             } else {
                 console.error('Error toggling device:', result.error);
-            }
-        })
-        .catch(handleApiError)
-        .then(retryResponse => {
-            if (retryResponse) {
-                return retryResponse.json();
-            }
-        })
-        .then(retriedResult => {
-            if (retriedResult && retriedResult.success) {
-                console.log(`Device ${deviceId} toggled successfully after retry`);
             }
         })
         .catch(error => {

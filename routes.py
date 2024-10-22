@@ -56,7 +56,7 @@ def login():
             response = make_response(redirect(url_for('main.devices')))
             set_access_cookies(response, access_token)
             set_refresh_cookies(response, refresh_token)
-            logging.info(f"User {username} logged in successfully. Access token: {access_token}")
+            logging.info(f"User {username} logged in successfully")
             return response
         else:
             logging.warning(f"Failed login attempt for user {username}")
@@ -210,12 +210,25 @@ def network_usage():
         logging.error(f"Error accessing network usage page: {str(e)}")
         return redirect(url_for('main.login'))
 
-@main.route('/api/network_usage/<int:device_id>')
+@main.route('/api/network_usage')
 @jwt_required()
-def get_network_usage(device_id):
-    device = Device.query.get_or_404(device_id)
-    hourly_usage = device.get_hourly_usage()
-    return jsonify(hourly_usage)
+def get_network_usage():
+    try:
+        end_time = datetime.utcnow()
+        start_time = end_time - timedelta(days=1)
+        hourly_usage = db.session.query(
+            func.date_trunc('hour', NetworkUsage.timestamp).label('hour'),
+            func.sum(NetworkUsage.data_used).label('usage')
+        ).filter(NetworkUsage.timestamp.between(start_time, end_time)
+        ).group_by('hour').order_by('hour').all()
+        
+        labels = [entry.hour.strftime('%Y-%m-%d %H:%M') for entry in hourly_usage]
+        values = [float(entry.usage) / (1024 * 1024) for entry in hourly_usage]  # Convert to MB
+        
+        return jsonify({'labels': labels, 'values': values})
+    except Exception as e:
+        logging.error(f"Error fetching network usage data: {str(e)}")
+        return jsonify({'error': 'Internal server error'}), 500
 
 @main.route('/logout')
 def logout():

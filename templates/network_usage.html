@@ -1,4 +1,3 @@
-
 {% extends "base.html" %}
 
 {% block content %}
@@ -18,7 +17,7 @@
 <div class="row mb-4">
     <div class="col-md-12">
         <h3>Hourly Network Usage (Last 24 Hours)</h3>
-        <canvas id="hourlyUsageChart"></canvas>
+        <canvas id="networkUsageChart"></canvas>
     </div>
 </div>
 
@@ -49,49 +48,4 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<script>
-    document.addEventListener('DOMContentLoaded', function() {
-        var ctx = document.getElementById('hourlyUsageChart').getContext('2d');
-        var hourlyData = {{ hourly_data | tojson }};
-        
-        var labels = hourlyData.map(function(item) {
-            return new Date(item.hour).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-        });
-        
-        var data = hourlyData.map(function(item) {
-            return item.usage / (1024 * 1024); // Convert to MB
-        });
-        
-        new Chart(ctx, {
-            type: 'line',
-            data: {
-                labels: labels,
-                datasets: [{
-                    label: 'Network Usage (MB)',
-                    data: data,
-                    borderColor: 'rgb(75, 192, 192)',
-                    tension: 0.1
-                }]
-            },
-            options: {
-                responsive: true,
-                scales: {
-                    x: {
-                        title: {
-                            display: true,
-                            text: 'Time'
-                        }
-                    },
-                    y: {
-                        title: {
-                            display: true,
-                            text: 'Usage (MB)'
-                        },
-                        beginAtZero: true
-                    }
-                }
-            }
-        });
-    });
-</script>
 {% endblock %}

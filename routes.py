@@ -202,6 +202,9 @@ def network_usage():
     try:
         current_user = get_jwt_identity()
         logging.info(f"User {current_user} accessing network usage page")
+        token = get_jwt()
+        logging.info(f"Token present: {bool(token)}")
+        
         devices = Device.query.all()
         
         for device in devices:
@@ -233,6 +236,9 @@ def get_network_usage():
     try:
         current_user = get_jwt_identity()
         logging.info(f"User {current_user} fetching network usage data")
+        token = get_jwt()
+        logging.info(f"Token present: {bool(token)}")
+        
         end_time = datetime.utcnow()
         start_time = end_time - timedelta(days=1)
         hourly_usage = db.session.query(

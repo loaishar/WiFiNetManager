@@ -274,6 +274,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 })
                 .catch(error => {
                     console.error('Error fetching network usage data:', error);
+                    if (error.message === 'Unauthorized') {
+                        window.location.href = '/login';
+                    }
                 });
         }
     }

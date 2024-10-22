@@ -17,7 +17,7 @@ function fetchWithAuth(url, options = {}) {
     return fetch(url, options)
         .then(response => {
             if (response.status === 401) {
-                // Token expired, try to refresh
+                console.log('Token expired, attempting to refresh');
                 return fetch('/refresh', { method: 'POST', credentials: 'include' })
                     .then(refreshResponse => {
                         if (!refreshResponse.ok) {
@@ -26,15 +26,19 @@ function fetchWithAuth(url, options = {}) {
                         return refreshResponse.json();
                     })
                     .then(data => {
-                        // Retry the original request with the new token
+                        console.log('Token refreshed successfully');
                         options.headers = options.headers || {};
                         options.headers['Authorization'] = `Bearer ${data.access_token}`;
                         return fetch(url, options);
                     })
-                    .catch(() => {
-                        // If refresh fails, redirect to login
+                    .catch(refreshError => {
+                        console.error('Error refreshing token:', refreshError);
                         window.location.href = '/login';
+                        throw refreshError;
                     });
+            }
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
             }
             return response;
         });
@@ -74,7 +78,6 @@ document.addEventListener('DOMContentLoaded', function() {
         socket.on('disconnect', function(reason) {
             console.log('Disconnected from WebSocket server:', reason);
             if (reason === 'io server disconnect') {
-                // The disconnection was initiated by the server, need to reconnect with a new token
                 socket.auth.token = getCookie('access_token_cookie');
                 socket.connect();
             }
@@ -83,7 +86,6 @@ document.addEventListener('DOMContentLoaded', function() {
         socket.on('connect_error', function(error) {
             console.error('Connection error:', error.message);
             if (error.message === 'Unauthorized') {
-                // Attempt to refresh the token
                 fetch('/refresh', { method: 'POST', credentials: 'include' })
                     .then(refreshResponse => {
                         if (!refreshResponse.ok) {
@@ -92,11 +94,11 @@ document.addEventListener('DOMContentLoaded', function() {
                         return refreshResponse.json();
                     })
                     .then(data => {
-                        // Update the token and reconnect
                         socket.auth.token = data.access_token;
                         socket.connect();
                     })
-                    .catch(() => {
+                    .catch(refreshError => {
+                        console.error('Error refreshing token:', refreshError);
                         window.location.href = '/login';
                     });
             }

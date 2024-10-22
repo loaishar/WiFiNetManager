@@ -219,7 +219,7 @@ def network_usage():
                                hourly_data=hourly_data)
     except Exception as e:
         logging.error(f"Error accessing network usage page: {str(e)}")
-        return redirect(url_for('main.login'))
+        return jsonify({'error': 'Internal server error'}), 500
 
 @main.route('/api/network_usage')
 @jwt_required()

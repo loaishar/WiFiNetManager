@@ -78,7 +78,7 @@ def refresh():
         return jsonify({"msg": "Token refresh failed"}), 401
 
 @main.route('/logout')
-@jwt_required()
+@jwt_required(optional=True)
 def logout():
     logging.info("User logged out")
     response = make_response(redirect(url_for('main.login')))
@@ -195,14 +195,11 @@ def network_usage():
         logging.info("Accessing network usage page")
         devices = Device.query.all()
         
-        # Calculate total network usage for each device
         for device in devices:
             device.total_usage = db.session.query(func.sum(NetworkUsage.data_used)).filter(NetworkUsage.device_id == device.id).scalar() or 0
         
-        # Get overall network usage
         total_network_usage = sum(device.total_usage for device in devices)
         
-        # Get hourly usage for the last 24 hours
         end_time = datetime.utcnow()
         start_time = end_time - timedelta(days=1)
         hourly_usage = db.session.query(
@@ -234,7 +231,7 @@ def get_network_usage():
         ).group_by('hour').order_by('hour').all()
         
         labels = [entry.hour.strftime('%Y-%m-%d %H:%M') for entry in hourly_usage]
-        values = [float(entry.usage) / (1024 * 1024) for entry in hourly_usage]  # Convert to MB
+        values = [float(entry.usage) / (1024 * 1024) for entry in hourly_usage]
         
         return jsonify({'labels': labels, 'values': values})
     except Exception as e:

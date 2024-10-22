@@ -5,8 +5,13 @@ function getCookie(name) {
 }
 
 function checkAuthentication() {
+    console.log('Checking authentication');
     const token = getCookie('access_token_cookie');
-    if (!token) {
+    const isLoginPage = window.location.pathname === '/login';
+    const isRegisterPage = window.location.pathname === '/register';
+
+    if (!token && !isLoginPage && !isRegisterPage) {
+        console.log('No token found, redirecting to login');
         window.location.href = '/login';
     }
 }
@@ -46,7 +51,18 @@ function fetchWithAuth(url, options = {}) {
 
 document.addEventListener('DOMContentLoaded', function() {
     console.log('DOM Content Loaded');
-    checkAuthentication();
+    const path = window.location.pathname;
+    const isProtectedPage = ['/devices', '/network_usage'].includes(path);
+
+    if (isProtectedPage) {
+        checkAuthentication();
+        initializeSocket();
+        if (path === '/devices') {
+            loadDevices();
+        } else if (path === '/network_usage') {
+            loadNetworkUsageData();
+        }
+    }
 
     const deviceList = document.getElementById('device-list');
     const scanButton = document.getElementById('scan-button');
@@ -122,8 +138,6 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    initializeSocket();
-
     function showLoading() {
         if (loadingIndicator) {
             loadingIndicator.style.display = 'block';
@@ -186,6 +200,8 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     function loadDevices() {
+        if (!deviceList) return;
+        
         showLoading();
         fetchWithAuth('/api/devices')
             .then(response => response.json())
@@ -228,8 +244,6 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    loadDevices();
-
     if (deviceList) {
         deviceList.addEventListener('click', function(event) {
             if (event.target.classList.contains('toggle-device')) {
@@ -239,46 +253,90 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    // Network Usage Chart
-    const ctx = document.getElementById('networkUsageChart');
-    if (ctx) {
-        fetchWithAuth('/api/network_usage')
-            .then(response => response.json())
-            .then(data => {
-                new Chart(ctx, {
-                    type: 'line',
-                    data: {
-                        labels: data.labels,
-                        datasets: [{
-                            label: 'Network Usage (MB)',
-                            data: data.values,
-                            borderColor: 'rgb(75, 192, 192)',
-                            tension: 0.1
-                        }]
+    function loadNetworkUsageData() {
+        const ctx = document.getElementById('networkUsageChart');
+        if (ctx) {
+            fetchWithAuth('/api/network_usage')
+                .then(response => response.json())
+                .then(data => {
+                    renderNetworkUsageChart(ctx, data);
+                    updateNetworkUsageStats(data);
+                })
+                .catch(error => {
+                    console.error('Error fetching network usage data:', error);
+                });
+        }
+    }
+
+    function renderNetworkUsageChart(ctx, data) {
+        new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: data.labels,
+                datasets: [{
+                    label: 'Network Usage (MB)',
+                    data: data.values,
+                    borderColor: 'rgb(75, 192, 192)',
+                    backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                    tension: 0.1,
+                    fill: true
+                }]
+            },
+            options: {
+                responsive: true,
+                scales: {
+                    x: {
+                        title: {
+                            display: true,
+                            text: 'Time'
+                        }
                     },
-                    options: {
-                        responsive: true,
-                        scales: {
-                            x: {
-                                title: {
-                                    display: true,
-                                    text: 'Time'
+                    y: {
+                        title: {
+                            display: true,
+                            text: 'Usage (MB)'
+                        },
+                        beginAtZero: true
+                    }
+                },
+                plugins: {
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                let label = context.dataset.label || '';
+                                if (label) {
+                                    label += ': ';
                                 }
-                            },
-                            y: {
-                                title: {
-                                    display: true,
-                                    text: 'Usage (MB)'
-                                },
-                                beginAtZero: true
+                                if (context.parsed.y !== null) {
+                                    label += context.parsed.y.toFixed(2) + ' MB';
+                                }
+                                return label;
                             }
                         }
                     }
-                });
-            })
-            .catch(error => {
-                console.error('Error fetching network usage data:', error);
-            });
+                }
+            }
+        });
+    }
+
+    function updateNetworkUsageStats(data) {
+        const totalUsage = data.values.reduce((a, b) => a + b, 0).toFixed(2);
+        const averageUsage = (totalUsage / data.values.length).toFixed(2);
+        const maxUsage = Math.max(...data.values).toFixed(2);
+
+        const statsContainer = document.getElementById('networkUsageStats');
+        if (statsContainer) {
+            statsContainer.innerHTML = `
+                <div class="card mb-3">
+                    <div class="card-body">
+                        <h5 class="card-title">Network Usage Statistics</h5>
+                        <p class="card-text">Total Usage: ${totalUsage} MB</p>
+                        <p class="card-text">Average Hourly Usage: ${averageUsage} MB</p>
+                        <p class="card-text">Peak Usage: ${maxUsage} MB</p>
+                    </div>
+                </div>
+            `;
+        }
     }
 });
 

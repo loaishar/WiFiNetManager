@@ -1,3 +1,5 @@
+let socket;
+
 function getCookie(name) {
     const value = `; ${document.cookie}`;
     const parts = value.split(`; ${name}=`);
@@ -14,9 +16,12 @@ function checkAuthentication() {
     if (!token && !isLoginPage && !isRegisterPage) {
         console.log('No token found, redirecting to login');
         window.location.href = '/login';
+        return false;
     } else if (token) {
         console.log('Token found, staying on current page');
+        return true;
     }
+    return false;
 }
 
 function fetchWithAuth(url, options = {}) {
@@ -52,94 +57,98 @@ function fetchWithAuth(url, options = {}) {
         });
 }
 
+function initializeSocket() {
+    console.log('Initializing Socket.IO');
+
+    const token = getCookie('access_token_cookie');
+    const socketUrl = window.location.origin;
+
+    console.log('Connecting to WebSocket URL:', socketUrl);
+
+    if (!token) {
+        console.log('No token available, skipping socket initialization');
+        return;
+    }
+
+    socket = io(socketUrl, {
+        transports: ['websocket'],
+        auth: {
+            token: token
+        },
+        reconnection: true,
+        reconnectionAttempts: 5
+    });
+
+    socket.on('connect', function() {
+        console.log('Connected to WebSocket server');
+    });
+
+    socket.on('disconnect', function(reason) {
+        console.log('Disconnected from WebSocket server:', reason);
+        if (reason === 'io server disconnect') {
+            socket.auth.token = getCookie('access_token_cookie');
+            socket.connect();
+        }
+    });
+
+    socket.on('connect_error', function(error) {
+        console.error('Connection error:', error.message);
+        if (error.message === 'Unauthorized') {
+            fetch('/refresh', { method: 'POST', credentials: 'include' })
+                .then(refreshResponse => {
+                    if (!refreshResponse.ok) {
+                        throw new Error('Token refresh failed');
+                    }
+                    return refreshResponse.json();
+                })
+                .then(data => {
+                    socket.auth.token = data.access_token;
+                    socket.connect();
+                })
+                .catch(refreshError => {
+                    console.error('Error refreshing token:', refreshError);
+                    window.location.href = '/login';
+                });
+        }
+    });
+
+    socket.on('device_updated', function(device) {
+        console.log('Device update received:', device);
+        updateDeviceInList(device);
+    });
+
+    socket.on('devices_update', function(devices) {
+        console.log('Devices update received:', devices);
+        refreshDeviceList(devices);
+    });
+
+    socket.on('error', function(error) {
+        console.error('WebSocket error:', error);
+        if (error.message === 'Unauthorized') {
+            window.location.href = '/login';
+        }
+    });
+}
+
 document.addEventListener('DOMContentLoaded', function() {
     console.log('DOM Content Loaded');
     const path = window.location.pathname;
     const isProtectedPage = ['/devices', '/network_usage'].includes(path);
 
     if (isProtectedPage) {
-        checkAuthentication();
-        initializeSocket();
-        if (path === '/devices') {
-            loadDevices();
-        } else if (path === '/network_usage') {
-            loadNetworkUsageData();
+        if (checkAuthentication()) {
+            initializeSocket();
+            if (path === '/devices') {
+                loadDevices();
+            } else if (path === '/network_usage') {
+                loadNetworkUsageData();
+            }
         }
     }
 
     const deviceList = document.getElementById('device-list');
     const scanButton = document.getElementById('scan-button');
     const loadingIndicator = document.getElementById('loading-indicator');
-
-    let socket;
-
-    function initializeSocket() {
-        console.log('Initializing Socket.IO');
-
-        const token = getCookie('access_token_cookie');
-        const socketUrl = window.location.origin;
-
-        console.log('Connecting to WebSocket URL:', socketUrl);
-
-        socket = io(socketUrl, {
-            transports: ['websocket'],
-            auth: {
-                token: token
-            },
-            reconnection: true,
-            reconnectionAttempts: 5
-        });
-
-        socket.on('connect', function() {
-            console.log('Connected to WebSocket server');
-        });
-
-        socket.on('disconnect', function(reason) {
-            console.log('Disconnected from WebSocket server:', reason);
-            if (reason === 'io server disconnect') {
-                socket.auth.token = getCookie('access_token_cookie');
-                socket.connect();
-            }
-        });
-
-        socket.on('connect_error', function(error) {
-            console.error('Connection error:', error.message);
-            if (error.message === 'Unauthorized') {
-                fetch('/refresh', { method: 'POST', credentials: 'include' })
-                    .then(refreshResponse => {
-                        if (!refreshResponse.ok) {
-                            throw new Error('Token refresh failed');
-                        }
-                        return refreshResponse.json();
-                    })
-                    .then(data => {
-                        socket.auth.token = data.access_token;
-                        socket.connect();
-                    })
-                    .catch(refreshError => {
-                        console.error('Error refreshing token:', refreshError);
-                        window.location.href = '/login';
-                    });
-            }
-        });
-
-        socket.on('device_updated', function(device) {
-            console.log('Device update received:', device);
-            updateDeviceInList(device);
-        });
-
-        socket.on('devices_update', function(devices) {
-            console.log('Devices update received:', devices);
-            refreshDeviceList(devices);
-        });
-
-        socket.on('error', function(error) {
-            console.error('WebSocket error:', error);
-            if (error.message === 'Unauthorized') {
-                window.location.href = '/login';
-            }
-        });
-    }
 
     function showLoading() {
         if (loadingIndicator) {

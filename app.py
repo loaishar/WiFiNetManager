@@ -36,7 +36,7 @@ def create_app():
     app.config["JWT_COOKIE_SECURE"] = False  # Set to True in production with HTTPS
     app.config["JWT_COOKIE_SAMESITE"] = "Lax"
     app.config["JWT_COOKIE_CSRF_PROTECT"] = False  # Set to True and implement CSRF protection in production
-    app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(minutes=15)
+    app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(minutes=30)  # Increase expiration time for testing
     app.config['JWT_REFRESH_TOKEN_EXPIRES'] = timedelta(days=30)
 
     # Initialize extensions

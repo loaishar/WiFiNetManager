@@ -56,7 +56,7 @@ def login():
             response = make_response(redirect(url_for('main.devices')))
             set_access_cookies(response, access_token)
             set_refresh_cookies(response, refresh_token)
-            logging.info(f"User {username} logged in successfully")
+            logging.info(f"User {username} logged in successfully. Access token: {access_token[:10]}...")
             return response
         else:
             logging.warning(f"Failed login attempt for user {username}")

@@ -7,12 +7,15 @@ function getCookie(name) {
 function checkAuthentication() {
     console.log('Checking authentication');
     const token = getCookie('access_token_cookie');
+    console.log('Token found:', token ? 'Yes' : 'No');
     const isLoginPage = window.location.pathname === '/login';
     const isRegisterPage = window.location.pathname === '/register';
 
     if (!token && !isLoginPage && !isRegisterPage) {
         console.log('No token found, redirecting to login');
         window.location.href = '/login';
+    } else if (token) {
+        console.log('Token found, staying on current page');
     }
 }
 

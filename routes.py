@@ -1,7 +1,7 @@
 from flask import Blueprint, render_template, request, jsonify, redirect, url_for, flash, make_response
 from flask_jwt_extended import (
     create_access_token, create_refresh_token, jwt_required, get_jwt_identity,
-    set_access_cookies, set_refresh_cookies, verify_jwt_in_request, decode_token, unset_jwt_cookies
+    set_access_cookies, set_refresh_cookies, unset_jwt_cookies, get_jwt
 )
 from extensions import db, jwt, socketio
 from models import User, Device, NetworkUsage
@@ -67,11 +67,23 @@ def login():
 @main.route('/refresh', methods=['POST'])
 @jwt_required(refresh=True)
 def refresh():
-    current_user = get_jwt_identity()
-    new_token = create_access_token(identity=current_user)
-    resp = jsonify({'access_token': new_token})
-    set_access_cookies(resp, new_token)
-    return resp, 200
+    try:
+        current_user = get_jwt_identity()
+        new_access_token = create_access_token(identity=current_user)
+        resp = jsonify({'access_token': new_access_token})
+        set_access_cookies(resp, new_access_token)
+        return resp, 200
+    except Exception as e:
+        logging.error(f"Error refreshing token: {str(e)}")
+        return jsonify({"msg": "Token refresh failed"}), 401
+
+@main.route('/logout')
+@jwt_required()
+def logout():
+    logging.info("User logged out")
+    response = make_response(redirect(url_for('main.login')))
+    unset_jwt_cookies(response)
+    return response
 
 @main.route('/devices')
 @jwt_required()
@@ -180,7 +192,6 @@ def scan():
 @jwt_required()
 def network_usage():
     try:
-        verify_jwt_in_request()
         logging.info("Accessing network usage page")
         devices = Device.query.all()
         
@@ -230,13 +241,6 @@ def get_network_usage():
         logging.error(f"Error fetching network usage data: {str(e)}")
         return jsonify({'error': 'Internal server error'}), 500
 
-@main.route('/logout')
-def logout():
-    logging.info("User logged out")
-    response = make_response(redirect(url_for('main.login')))
-    unset_jwt_cookies(response)
-    return response
-
 @socketio.on('connect')
 def handle_connect():
     logging.info("WebSocket connection attempt")
@@ -254,9 +258,8 @@ def handle_connect():
             return False
 
         try:
-            decoded_token = decode_token(token)
-            user_id = decoded_token['sub']
-            logging.info(f'User {user_id} connected via WebSocket')
+            jwt.decode_token(token)
+            logging.info(f'User connected via WebSocket')
         except Exception as e:
             logging.error(f'Invalid token for WebSocket connection: {str(e)}')
             return False
@@ -271,9 +274,9 @@ def handle_disconnect():
     logging.info('Client disconnected from WebSocket')
 
 @socketio.on('toggle_device')
+@jwt_required()
 def handle_toggle_device(data):
     try:
-        verify_jwt_in_request()
         device_id = data.get('device_id')
         device = Device.query.get_or_404(device_id)
         device.blocked = not device.blocked

@@ -25,9 +25,15 @@ function fetchWithAuth(url, options = {}) {
                         }
                         return refreshResponse.json();
                     })
-                    .then(() => {
-                        // Retry the original request after refreshing token
+                    .then(data => {
+                        // Retry the original request with the new token
+                        options.headers = options.headers || {};
+                        options.headers['Authorization'] = `Bearer ${data.access_token}`;
                         return fetch(url, options);
+                    })
+                    .catch(() => {
+                        // If refresh fails, redirect to login
+                        window.location.href = '/login';
                     });
             }
             return response;
@@ -85,9 +91,9 @@ document.addEventListener('DOMContentLoaded', function() {
                         }
                         return refreshResponse.json();
                     })
-                    .then(() => {
+                    .then(data => {
                         // Update the token and reconnect
-                        socket.auth.token = getCookie('access_token_cookie');
+                        socket.auth.token = data.access_token;
                         socket.connect();
                     })
                     .catch(() => {

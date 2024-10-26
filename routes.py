@@ -51,12 +51,19 @@ def login():
 
         user = User.query.filter_by(username=username).first()
         if user and user.check_password(password):
-            access_token = create_access_token(identity=user.id)
+            access_token = create_access_token(
+                identity=user.id,
+                expires_delta=timedelta(hours=1)
+            )
             refresh_token = create_refresh_token(identity=user.id)
+            
             response = make_response(redirect(url_for('main.devices')))
             set_access_cookies(response, access_token)
             set_refresh_cookies(response, refresh_token)
-            logging.info(f"User {username} logged in successfully. Access token: {access_token[:10]}...")
+            
+            logging.info(f"Login successful for user {username}")
+            logging.info(f"Access token cookie set: {access_token[:10]}...")
+            
             return response
         else:
             logging.warning(f"Failed login attempt for user {username}")
@@ -70,8 +77,10 @@ def refresh():
     try:
         current_user = get_jwt_identity()
         new_access_token = create_access_token(identity=current_user)
+        
         resp = jsonify({'access_token': new_access_token})
         set_access_cookies(resp, new_access_token)
+        
         logging.info(f"Token refreshed for user {current_user}")
         return resp, 200
     except Exception as e:
@@ -248,7 +257,7 @@ def get_network_usage():
         ).group_by('hour').order_by('hour').all()
         
         labels = [entry.hour.strftime('%Y-%m-%d %H:%M') for entry in hourly_usage]
-        values = [float(entry.usage) / (1024 * 1024) for entry in hourly_usage]
+        values = [float(entry.usage) / (1024 * 1024) for entry in hourly_usage]  # Convert to MB
         
         return jsonify({'labels': labels, 'values': values})
     except Exception as e:

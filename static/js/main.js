@@ -39,64 +39,6 @@ function fetchWithAuth(url, options = {}) {
         });
 }
 
-function initializeSocket() {
-    console.log('Initializing Socket.IO');
-    const socketUrl = window.location.origin;
-    console.log('Connecting to WebSocket URL:', socketUrl);
-
-    socket = io(socketUrl, {
-        transports: ['websocket'],
-        auth: {
-            token: getCookie('access_token_cookie')
-        },
-        reconnection: true,
-        reconnectionAttempts: 5,
-        reconnectionDelay: 1000
-    });
-
-    socket.on('connect', function() {
-        console.log('Connected to WebSocket server');
-    });
-
-    socket.on('disconnect', function(reason) {
-        console.log('Disconnected from WebSocket server:', reason);
-    });
-
-    socket.on('connect_error', (error) => {
-        console.error('Socket connection error:', error);
-        if (error.message === 'jwt expired') {
-            fetch('/refresh', { 
-                method: 'POST',
-                credentials: 'include'
-            })
-            .then(response => {
-                if (!response.ok) {
-                    throw new Error('Token refresh failed');
-                }
-                socket.connect();
-            })
-            .catch(() => {
-                window.location.href = '/login';
-            });
-        }
-    });
-
-    socket.on('device_updated', function(device) {
-        console.log('Device update received:', device);
-        updateDeviceInList(device);
-    });
-
-    socket.on('devices_update', function(devices) {
-        console.log('Devices update received:', devices);
-        refreshDeviceList(devices);
-    });
-
-    socket.on('network_usage_update', function(data) {
-        console.log('Network usage update received:', data);
-        updateNetworkUsageData(data);
-    });
-}
-
 function loadDevices() {
     const deviceList = document.getElementById('device-list');
     if (!deviceList) return;
@@ -129,6 +71,20 @@ function hideLoading() {
     if (loadingIndicator) {
         loadingIndicator.style.display = 'none';
     }
+}
+
+function showChartLoading() {
+    const containers = document.querySelectorAll('.chart-container');
+    containers.forEach(container => {
+        container.innerHTML = '<div class="d-flex justify-content-center align-items-center" style="height: 300px;"><div class="spinner-border text-primary" role="status"><span class="visually-hidden">Loading...</span></div></div>';
+    });
+}
+
+function showChartError(message) {
+    const containers = document.querySelectorAll('.chart-container');
+    containers.forEach(container => {
+        container.innerHTML = `<div class="alert alert-danger">${message}</div>`;
+    });
 }
 
 function updateDeviceInList(device) {
@@ -182,15 +138,23 @@ function refreshDeviceList(devices) {
 }
 
 function loadNetworkUsageData(timeRange = '24h') {
+    console.log('Loading network usage data for range:', timeRange);
+    showChartLoading();
+    
     fetchWithAuth(`/api/network_usage?range=${timeRange}`)
         .then(response => response.json())
         .then(data => {
+            console.log('Network usage data received:', data);
+            if (data.error) {
+                throw new Error(data.error);
+            }
             renderNetworkUsageChart(data);
             renderDeviceDistributionChart(data.devices);
             updateNetworkStats(data);
         })
         .catch(error => {
             console.error('Error fetching network usage data:', error);
+            showChartError('Error loading network usage data. Please try again later.');
         });
 }
 
@@ -346,18 +310,20 @@ function updateNetworkStats(data) {
         `${stats.period_comparison > 0 ? '+' : ''}${stats.period_comparison}% vs previous`;
 }
 
-function updateNetworkUsageData(data) {
-    if (networkUsageChart) {
-        networkUsageChart.data.labels = data.labels;
-        networkUsageChart.data.datasets[0].data = data.values;
-        networkUsageChart.update('none');
-    }
+function updateNetworkUsageChart(data) {
+    if (!data || !data.labels || !data.values) return;
+    
+    networkUsageChart.data.labels = data.labels;
+    networkUsageChart.data.datasets[0].data = data.values;
+    networkUsageChart.update('none');
+}
 
-    if (deviceDistributionChart) {
-        renderDeviceDistributionChart(data.devices);
-    }
-
-    updateNetworkStats(data);
+function updateDeviceDistributionChart(devices) {
+    if (!devices || !devices.length) return;
+    
+    deviceDistributionChart.data.labels = devices.map(d => d.name);
+    deviceDistributionChart.data.datasets[0].data = devices.map(d => d.usage);
+    deviceDistributionChart.update('none');
 }
 
 function initializeTimeRangeButtons() {
@@ -420,6 +386,70 @@ function toggleDevice(deviceId) {
         .catch(error => {
             console.error('Error toggling device:', error);
         });
+}
+
+function initializeSocket() {
+    console.log('Initializing Socket.IO');
+    const socketUrl = window.location.origin;
+    console.log('Connecting to WebSocket URL:', socketUrl);
+
+    socket = io(socketUrl, {
+        transports: ['websocket'],
+        auth: {
+            token: getCookie('access_token_cookie')
+        },
+        reconnection: true,
+        reconnectionAttempts: 5,
+        reconnectionDelay: 1000
+    });
+
+    socket.on('connect', function() {
+        console.log('Connected to WebSocket server');
+    });
+
+    socket.on('disconnect', function(reason) {
+        console.log('Disconnected from WebSocket server:', reason);
+    });
+
+    socket.on('connect_error', (error) => {
+        console.error('Socket connection error:', error);
+        if (error.message === 'jwt expired') {
+            fetch('/refresh', { 
+                method: 'POST',
+                credentials: 'include'
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Token refresh failed');
+                }
+                socket.connect();
+            })
+            .catch(() => {
+                window.location.href = '/login';
+            });
+        }
+    });
+
+    socket.on('device_updated', function(device) {
+        console.log('Device update received:', device);
+        updateDeviceInList(device);
+    });
+
+    socket.on('devices_update', function(devices) {
+        console.log('Devices update received:', devices);
+        refreshDeviceList(devices);
+    });
+
+    socket.on('network_usage_update', function(data) {
+        console.log('Network usage update received:', data);
+        if (networkUsageChart) {
+            updateNetworkUsageChart(data);
+        }
+        if (deviceDistributionChart) {
+            updateDeviceDistributionChart(data.devices);
+        }
+        updateNetworkStats(data);
+    });
 }
 
 document.addEventListener('DOMContentLoaded', function() {

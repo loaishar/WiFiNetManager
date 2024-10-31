@@ -343,7 +343,9 @@ def handle_disconnect():
     logging.info('Client disconnected from WebSocket')
 
 def simulate_network_usage_updates():
-    app = current_app._get_current_object()  # Get the current app instance
+    from app import create_app
+    app = create_app()
+    
     while True:
         try:
             with app.app_context():
@@ -355,10 +357,8 @@ def simulate_network_usage_updates():
 
                 response = get_network_usage()
                 socketio.emit('network_usage_update', response.json, broadcast=True)
-
         except Exception as e:
             logging.error(f"Error in network usage simulation: {str(e)}")
-        
         eventlet.sleep(60)
 
 @socketio.on('connect')

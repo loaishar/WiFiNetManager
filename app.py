@@ -52,15 +52,16 @@ def create_app():
     logging.getLogger('socketio').setLevel(logging.DEBUG)
     logging.getLogger('engineio').setLevel(logging.DEBUG)
 
+    # Register the Blueprint
+    app.register_blueprint(main_blueprint)
+
+    # Initialize database and start monitoring
     with app.app_context():
         db.create_all()
         
         # Start network monitoring
         from network_scanner import start_total_usage_monitoring
         start_total_usage_monitoring()
-
-    # Register the Blueprint
-    app.register_blueprint(main_blueprint)
 
     # Print URL map for debugging
     print("URL Map:")

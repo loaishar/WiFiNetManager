@@ -95,23 +95,27 @@ def scan_network():
 
 def start_total_usage_monitoring():
     """Start background thread to monitor total network usage."""
-    from extensions import db
-    from models import TotalNetworkUsage
+    from flask import current_app
+    app = current_app._get_current_object()
 
     def monitor():
         logging.info("Starting network usage monitoring")
         while True:
             try:
-                usage = get_total_network_usage()
-                if usage:
-                    total_usage = TotalNetworkUsage(
-                        timestamp=usage['timestamp'],
-                        bytes_sent=usage['bytes_sent'],
-                        bytes_recv=usage['bytes_recv']
-                    )
-                    db.session.add(total_usage)
-                    db.session.commit()
-                    logging.debug(f"Recorded network usage: sent={usage['bytes_sent']}, recv={usage['bytes_recv']}")
+                with app.app_context():
+                    from extensions import db
+                    from models import TotalNetworkUsage
+                    
+                    usage = get_total_network_usage()
+                    if usage:
+                        total_usage = TotalNetworkUsage(
+                            timestamp=usage['timestamp'],
+                            bytes_sent=usage['bytes_sent'],
+                            bytes_recv=usage['bytes_recv']
+                        )
+                        db.session.add(total_usage)
+                        db.session.commit()
+                        logging.debug(f"Recorded network usage: sent={usage['bytes_sent']}, recv={usage['bytes_recv']}")
             except Exception as e:
                 logging.error(f"Error in network monitoring: {str(e)}")
                 if 'db' in locals():

@@ -41,18 +41,21 @@ def index():
 
 @main.route('/register', methods=['GET', 'POST'])
 def register():
-    logging.info("Accessing register route")
     if request.method == 'POST':
         username = request.form['username']
         email = request.form['email']
         password = request.form['password']
 
         try:
-            user = User(username=username, email=email)
+            # Make the first user an admin
+            is_admin = User.query.count() == 0
+            user = User(username=username, email=email, is_admin=is_admin)
             user.set_password(password)
             db.session.add(user)
             db.session.commit()
-            logging.info(f"User {username} registered successfully")
+            
+            if is_admin:
+                logging.info(f"First user {username} registered as admin")
             return redirect(url_for('main.login'))
         except Exception as e:
             logging.error(f"Error during registration: {str(e)}")
@@ -440,51 +443,3 @@ def update_device(device_id):
         logging.error(f"Error updating device: {str(e)}")
         db.session.rollback()
         return jsonify({'error': 'Internal server error'}), 500
-
-@socketio.on('connect')
-def handle_connect():
-    try:
-        verify_jwt_in_request()
-        current_user = get_jwt_identity()
-        logging.info(f'User {current_user} connected via WebSocket')
-        return True
-    except Exception as e:
-        logging.error(f'Error during WebSocket connection: {str(e)}')
-        return False
-
-@socketio.on('disconnect')
-def handle_disconnect():
-    logging.info('Client disconnected from WebSocket')
-
-def simulate_network_usage_updates():
-    from app import create_app
-    app = create_app()
-    
-    while True:
-        try:
-            with app.app_context():
-                devices = Device.query.all()
-                for device in devices:
-                    try:
-                        usage = random.randint(1000000, 10000000)
-                        device.update_data_usage(usage)
-                        db.session.commit()
-                    except Exception as e:
-                        logging.error(f"Error updating device {device.id}: {str(e)}")
-                        db.session.rollback()
-                        continue
-
-                response = get_network_usage()
-                if hasattr(response, 'json'):
-                    socketio.emit('network_usage_update', response.json, broadcast=True)
-                else:
-                    logging.error("Invalid response from get_network_usage()")
-        except Exception as e:
-            logging.error(f"Error in network usage simulation: {str(e)}")
-        finally:
-            db.session.close()
-        eventlet.sleep(60)
-
-@socketio.on('connect')
-def start_usage_simulation():
-    eventlet.spawn(simulate_network_usage_updates)

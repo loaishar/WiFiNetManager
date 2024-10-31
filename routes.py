@@ -11,7 +11,6 @@ import logging
 from datetime import datetime, timedelta
 from flask_socketio import emit
 from sqlalchemy import func, desc
-import random
 import eventlet
 from functools import wraps
 
@@ -48,21 +47,6 @@ def load_logged_in_user():
             g.user = None
     except Exception:
         g.user = None
-
-@main.route('/api/check_first_user')
-def check_first_user():
-    try:
-        first_user = User.query.order_by(User.id.asc()).first()
-        if first_user:
-            return jsonify({
-                'username': first_user.username,
-                'is_admin': first_user.is_admin,
-                'message': f'The first registered user (admin) is: {first_user.username}'
-            })
-        return jsonify({'error': 'No users found in the database'}), 404
-    except Exception as e:
-        logging.error(f"Error checking first user: {str(e)}")
-        return jsonify({'error': 'Internal server error'}), 500
 
 @main.route('/')
 def index():
@@ -216,7 +200,7 @@ def scan():
         for device_data in new_devices:
             existing_device = Device.query.filter_by(mac_address=device_data['mac_address']).first()
             if existing_device:
-                logging.debug(f"Updating existing device: {existing_device.name}")
+                logging.debug(f"Updating existing device: {device_data['name']}")
                 existing_device.name = device_data['name']
                 existing_device.ip_address = device_data['ip_address']
                 existing_device.status = device_data['status']
@@ -334,18 +318,6 @@ def get_network_usage():
         else:
             trend = 0
 
-        previous_start = start_time - (end_time - start_time)
-        previous_usage = db.session.query(
-            func.sum(NetworkUsage.data_used)
-        ).filter(
-            NetworkUsage.timestamp.between(previous_start, start_time)
-        ).scalar() or 0
-
-        period_comparison = (
-            ((total_usage - previous_usage) / previous_usage * 100)
-            if previous_usage > 0 else 0
-        )
-
         devices = Device.query.all()
         device_usage = []
         for device in devices:
@@ -358,18 +330,18 @@ def get_network_usage():
 
             device_usage.append({
                 'name': device.name,
-                'usage': float(device_data.total_usage or 0) / (1024 * 1024)
+                'usage': float(device_data.total_usage or 0) / (1024 * 1024)  # Convert to MB
             })
 
         response_data = {
             'labels': [entry.interval.isoformat() for entry in usage_data],
-            'values': [float(entry.usage or 0) / (1024 * 1024) for entry in usage_data],
+            'values': [float(entry.usage or 0) / (1024 * 1024) for entry in usage_data],  # Convert to MB
             'devices': sorted(device_usage, key=lambda x: x['usage'], reverse=True),
             'statistics': {
-                'total_usage': float(total_usage) / (1024 * 1024),
+                'total_usage': float(total_usage) / (1024 * 1024),  # Convert to MB
                 'peak_usage_time': peak_time.strftime('%Y-%m-%d %H:%M') if peak_time else None,
                 'trend': trend,
-                'period_comparison': period_comparison
+                'period_comparison': 0  # Reset to 0 since we're using real data
             }
         }
 

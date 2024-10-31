@@ -51,7 +51,6 @@ def get_device_name(ip):
     except Exception as e:
         logging.error(f"Error getting device name for {ip}: {str(e)}")
     
-    # Fallback to IP-based name
     return f"Device-{ip.split('.')[-1]}"
 
 def get_device_usage(mac_address):

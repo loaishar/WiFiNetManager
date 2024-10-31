@@ -101,19 +101,6 @@ def scan_network():
 
 --------------------------------------------------
 
-File: ./main.py
---------------------------------------------------
-Contents of ./main.py:
-from app import create_app
-from extensions import socketio
-
-app = create_app()
-
-if __name__ == "__main__":
-    socketio.run(app, host="0.0.0.0", port=5000, debug=True)
-
---------------------------------------------------
-
 File: ./extensions.py
 --------------------------------------------------
 Contents of ./extensions.py:
@@ -188,6 +175,21 @@ class NetworkUsage(db.Model):
 
 --------------------------------------------------
 
+File: ./main.py
+--------------------------------------------------
+Contents of ./main.py:
+import os
+from app import create_app
+from extensions import socketio
+
+app = create_app()
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    socketio.run(app, host="0.0.0.0", port=port, debug=True)
+
+--------------------------------------------------
+
 File: ./app.py
 --------------------------------------------------
 Contents of ./app.py:
@@ -224,10 +226,13 @@ def create_app():
     # Setup JWT
     app.config["JWT_SECRET_KEY"] = os.environ.get("FLASK_SECRET_KEY") or "jwt secret key"
     app.config["JWT_TOKEN_LOCATION"] = ["cookies"]
-    app.config["JWT_COOKIE_SECURE"] = False  # Set to True in production with HTTPS
-    app.config["JWT_COOKIE_CSRF_PROTECT"] = False  # Set to True and implement CSRF protection in production
-    app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(minutes=15)
+    app.config["JWT_ACCESS_COOKIE_PATH"] = "/"
+    app.config["JWT_REFRESH_COOKIE_PATH"] = "/refresh"
+    app.config["JWT_COOKIE_CSRF_PROTECT"] = False
+    app.config["JWT_COOKIE_SECURE"] = False  # Set to True in production
+    app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=1)
     app.config['JWT_REFRESH_TOKEN_EXPIRES'] = timedelta(days=30)
+    app.config['JWT_COOKIE_SAMESITE'] = 'Lax'
 
     # Initialize extensions
     db.init_app(app)
@@ -253,11 +258,6 @@ def create_app():
     print("URL Map:")
     print(app.url_map)
 
-    # Add a test route
-    @app.route('/test')
-    def test_route():
-        return 'Test Route Working'
-
     @socketio.on_error_default
     def default_error_handler(e):
         app.logger.error(f'An error occurred: {str(e)}')
@@ -272,7 +272,8 @@ Contents of ./routes.py:
 from flask import Blueprint, render_template, request, jsonify, redirect, url_for, flash, make_response
 from flask_jwt_extended import (
     create_access_token, create_refresh_token, jwt_required, get_jwt_identity,
-    set_access_cookies, set_refresh_cookies, verify_jwt_in_request, decode_token, unset_jwt_cookies
+    set_access_cookies, set_refresh_cookies, unset_jwt_cookies, get_jwt,
+    verify_jwt_in_request
 )
 from extensions import db, jwt, socketio
 from models import User, Device, NetworkUsage
@@ -281,6 +282,7 @@ import logging
 from datetime import datetime, timedelta
 from flask_socketio import emit
 from sqlalchemy import func
+import random
 
 main = Blueprint('main', __name__)
 
@@ -319,41 +321,71 @@ def login():
     if request.method == 'POST':
         username = request.form['username']
         password = request.form['password']
-
+        
         user = User.query.filter_by(username=username).first()
         if user and user.check_password(password):
-            access_token = create_access_token(identity=user.id)
+            # Create tokens with longer expiration
+            access_token = create_access_token(
+                identity=user.id,
+                expires_delta=timedelta(hours=1)
+            )
             refresh_token = create_refresh_token(identity=user.id)
+            
+            # Create response with proper redirect
             response = make_response(redirect(url_for('main.devices')))
+            
+            # Set cookie attributes
             set_access_cookies(response, access_token)
             set_refresh_cookies(response, refresh_token)
-            logging.info(f"User {username} logged in successfully. Access token: {access_token}")
+            
+            logging.info(f"Login successful for user {username}")
+            logging.info(f"Access token cookie set: {access_token[:10]}...")
+            
             return response
         else:
             logging.warning(f"Failed login attempt for user {username}")
             flash('Invalid username or password', 'error')
-
+    
     return render_template('login.html')
 
 @main.route('/refresh', methods=['POST'])
 @jwt_required(refresh=True)
 def refresh():
-    current_user = get_jwt_identity()
-    new_token = create_access_token(identity=current_user)
-    resp = jsonify({'access_token': new_token})
-    set_access_cookies(resp, new_token)
-    return resp, 200
+    try:
+        current_user = get_jwt_identity()
+        new_access_token = create_access_token(identity=current_user)
+        
+        resp = jsonify({'access_token': new_access_token})
+        set_access_cookies(resp, new_access_token)
+        
+        logging.info(f"Token refreshed for user {current_user}")
+        return resp, 200
+    except Exception as e:
+        logging.error(f"Error refreshing token: {str(e)}")
+        return jsonify({"msg": "Token refresh failed"}), 401
+
+@main.route('/logout')
+@jwt_required(optional=True)
+def logout():
+    logging.info("User logged out")
+    response = make_response(redirect(url_for('main.login')))
+    unset_jwt_cookies(response)
+    return response
 
 @main.route('/devices')
 @jwt_required()
 def devices():
     logging.info("Accessing devices route")
+    current_user = get_jwt_identity()
+    logging.info(f"User {current_user} accessing devices page")
     return render_template('devices.html')
 
 @main.route('/api/devices', methods=['GET'])
 @jwt_required()
 def get_devices():
     logging.info("Fetching devices")
+    current_user = get_jwt_identity()
+    logging.info(f"User {current_user} fetching devices")
     try:
         devices = Device.query.all()
         logging.debug(f"Found {len(devices)} devices")
@@ -374,6 +406,8 @@ def get_devices():
 @main.route('/api/devices/<int:device_id>/toggle', methods=['POST'])
 @jwt_required()
 def toggle_device(device_id):
+    current_user = get_jwt_identity()
+    logging.info(f"User {current_user} toggling device {device_id}")
     try:
         device = Device.query.get_or_404(device_id)
         device.blocked = not device.blocked
@@ -401,7 +435,8 @@ def toggle_device(device_id):
 @main.route('/api/scan', methods=['POST'])
 @jwt_required()
 def scan():
-    logging.info("Scanning for new devices")
+    current_user = get_jwt_identity()
+    logging.info(f"User {current_user} scanning for new devices")
     try:
         new_devices = scan_network()
         logging.debug(f"Scan returned {len(new_devices)} devices")
@@ -413,6 +448,8 @@ def scan():
                 existing_device.ip_address = device_data['ip_address']
                 existing_device.status = device_data['status']
                 existing_device.last_seen = device_data['last_seen']
+                # Update data usage randomly for demo purposes
+                existing_device.update_data_usage(random.randint(1000000, 10000000))  # 1-10 MB
             else:
                 logging.debug(f"Adding new device: {device_data['name']}")
                 new_device = Device(
@@ -451,18 +488,18 @@ def scan():
 @jwt_required()
 def network_usage():
     try:
-        verify_jwt_in_request()
-        logging.info("Accessing network usage page")
+        current_user = get_jwt_identity()
+        logging.info(f"User {current_user} accessing network usage page")
+        
         devices = Device.query.all()
         
-        # Calculate total network usage for each device
+        # Calculate total usage for each device
         for device in devices:
             device.total_usage = db.session.query(func.sum(NetworkUsage.data_used)).filter(NetworkUsage.device_id == device.id).scalar() or 0
         
-        # Get overall network usage
         total_network_usage = sum(device.total_usage for device in devices)
         
-        # Get hourly usage for the last 24 hours
+        # Get hourly usage data for the last 24 hours
         end_time = datetime.utcnow()
         start_time = end_time - timedelta(days=1)
         hourly_usage = db.session.query(
@@ -473,86 +510,79 @@ def network_usage():
         
         hourly_data = [{'hour': entry.hour.isoformat(), 'usage': entry.usage} for entry in hourly_usage]
         
-        return render_template('network_usage.html', 
-                               devices=devices, 
-                               total_network_usage=total_network_usage,
-                               hourly_data=hourly_data)
+        # Get top devices by usage
+        top_devices = sorted(devices, key=lambda x: x.total_usage, reverse=True)[:5]
+        
+        return render_template('network_usage.html',
+                             devices=devices,
+                             total_network_usage=total_network_usage,
+                             hourly_data=hourly_data,
+                             top_devices=top_devices)
     except Exception as e:
         logging.error(f"Error accessing network usage page: {str(e)}")
-        return redirect(url_for('main.login'))
+        return jsonify({'error': 'Internal server error'}), 500
 
-@main.route('/api/network_usage/<int:device_id>')
+@main.route('/api/network_usage')
 @jwt_required()
-def get_network_usage(device_id):
-    device = Device.query.get_or_404(device_id)
-    hourly_usage = device.get_hourly_usage()
-    return jsonify(hourly_usage)
-
-@main.route('/logout')
-def logout():
-    logging.info("User logged out")
-    response = make_response(redirect(url_for('main.login')))
-    unset_jwt_cookies(response)
-    return response
+def get_network_usage():
+    try:
+        current_user = get_jwt_identity()
+        logging.info(f"User {current_user} fetching network usage data")
+        
+        end_time = datetime.utcnow()
+        start_time = end_time - timedelta(days=1)
+        
+        # Get hourly usage data
+        hourly_usage = db.session.query(
+            func.date_trunc('hour', NetworkUsage.timestamp).label('hour'),
+            func.sum(NetworkUsage.data_used).label('usage')
+        ).filter(NetworkUsage.timestamp.between(start_time, end_time)
+        ).group_by('hour').order_by('hour').all()
+        
+        # Convert bytes to MB for better readability
+        labels = [entry.hour.strftime('%Y-%m-%d %H:%M') for entry in hourly_usage]
+        values = [float(entry.usage or 0) / (1024 * 1024) for entry in hourly_usage]
+        
+        # Get device-specific usage data
+        devices = Device.query.all()
+        device_usage = []
+        for device in devices:
+            device_data = db.session.query(
+                func.sum(NetworkUsage.data_used).label('total_usage')
+            ).filter(
+                NetworkUsage.device_id == device.id,
+                NetworkUsage.timestamp.between(start_time, end_time)
+            ).first()
+            
+            device_usage.append({
+                'name': device.name,
+                'usage': float(device_data.total_usage or 0) / (1024 * 1024)  # Convert to MB
+            })
+        
+        return jsonify({
+            'labels': labels,
+            'values': values,
+            'devices': sorted(device_usage, key=lambda x: x['usage'], reverse=True)
+        })
+    except Exception as e:
+        logging.error(f"Error fetching network usage data: {str(e)}")
+        return jsonify({'error': 'Internal server error'}), 500
 
 @socketio.on('connect')
 def handle_connect():
     logging.info("WebSocket connection attempt")
     try:
-        token = request.args.get('token') or request.headers.get('Authorization')
-        if not token:
-            auth_data = request.args.get('auth')
-            if isinstance(auth_data, dict):
-                token = auth_data.get('token')
-        if not token:
-            token = request.cookies.get('access_token_cookie')
-
-        if not token:
-            logging.error('No token provided for WebSocket connection')
-            return False
-
-        try:
-            decoded_token = decode_token(token)
-            user_id = decoded_token['sub']
-            logging.info(f'User {user_id} connected via WebSocket')
-        except Exception as e:
-            logging.error(f'Invalid token for WebSocket connection: {str(e)}')
-            return False
+        verify_jwt_in_request()
+        current_user = get_jwt_identity()
+        logging.info(f'User {current_user} connected via WebSocket')
+        return True
     except Exception as e:
         logging.error(f'Error during WebSocket connection: {str(e)}')
         return False
 
-    return True
-
 @socketio.on('disconnect')
 def handle_disconnect():
     logging.info('Client disconnected from WebSocket')
-
-@socketio.on('toggle_device')
-def handle_toggle_device(data):
-    try:
-        verify_jwt_in_request()
-        device_id = data.get('device_id')
-        device = Device.query.get_or_404(device_id)
-        device.blocked = not device.blocked
-        db.session.commit()
-        
-        device_data = {
-            'id': device.id,
-            'name': device.name,
-            'ip_address': device.ip_address,
-            'mac_address': device.mac_address,
-            'status': device.status,
-            'blocked': device.blocked,
-            'last_seen': device.last_seen.isoformat() if device.last_seen else None,
-            'data_usage': device.data_usage
-        }
-        
-        emit('device_updated', device_data, broadcast=True)
-        logging.info(f'Device {device_id} toggled. New blocked status: {device.blocked}')
-    except Exception as e:
-        logging.error(f'Error handling toggle_device: {str(e)}')
-        emit('error', {'message': 'Unauthorized or invalid request'})
 
 --------------------------------------------------
 
@@ -632,6 +662,8 @@ body {
 File: ./static/js/main.js
 --------------------------------------------------
 Contents of ./static/js/main.js:
+let socket;
+
 function getCookie(name) {
     const value = `; ${document.cookie}`;
     const parts = value.split(`; ${name}=`);
@@ -639,207 +671,325 @@ function getCookie(name) {
 }
 
 function checkAuthentication() {
+    console.log('Checking authentication on path:', window.location.pathname);
     const token = getCookie('access_token_cookie');
+    console.log('Token found:', token ? 'Yes' : 'No');
+    
+    const isLoginPage = window.location.pathname === '/login';
+    const isRegisterPage = window.location.pathname === '/register';
+    const isHomePage = window.location.pathname === '/';
+    
+    if (isLoginPage || isRegisterPage || isHomePage) {
+        console.log('On public page, no authentication needed');
+        return true;
+    }
+    
     if (!token) {
+        console.log('No token found, redirecting to login');
         window.location.href = '/login';
+        return false;
     }
+    
+    console.log('Token found, authentication successful');
+    return true;
 }
 
-function handleApiError(error) {
-    if (error.response && error.response.status === 401) {
-        // Token has expired, try to refresh
-        return fetch('/refresh', { method: 'POST', credentials: 'include' })
-            .then(response => {
-                if (!response.ok) {
-                    throw new Error('Token refresh failed');
-                }
-                return response.json();
-            })
-            .then(data => {
-                // Update the token in cookies
-                document.cookie = `access_token_cookie=${data.access_token}; path=/; max-age=3600; SameSite=Lax`;
-                // Retry the original request
-                return fetch(error.config.url, {
-                    method: error.config.method,
-                    headers: {
-                        'Authorization': `Bearer ${data.access_token}`
+function fetchWithAuth(url, options = {}) {
+    console.log('Fetching with auth:', url);
+    options.credentials = 'include';
+
+    return fetch(url, options)
+        .then(response => {
+            console.log('Response status:', response.status);
+            if (response.status === 401) {
+                console.log('Token expired, attempting to refresh');
+                return fetch('/refresh', { 
+                    method: 'POST', 
+                    credentials: 'include'
+                })
+                .then(refreshResponse => {
+                    console.log('Refresh response status:', refreshResponse.status);
+                    if (!refreshResponse.ok) {
+                        throw new Error('Token refresh failed');
                     }
+                    return refreshResponse.json();
+                })
+                .then(() => {
+                    console.log('Token refreshed successfully');
+                    return fetch(url, options);
+                })
+                .catch(refreshError => {
+                    console.error('Error refreshing token:', refreshError);
+                    if (window.location.pathname !== '/login') {
+                        window.location.href = '/login';
+                    }
+                    throw refreshError;
                 });
-            })
-            .catch(() => {
-                // If refresh fails, redirect to login
-                window.location.href = '/login';
-            });
-    }
-    return Promise.reject(error);
+            }
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            return response;
+        });
 }
 
-document.addEventListener('DOMContentLoaded', function() {
-    console.log('DOM Content Loaded');
-    checkAuthentication();
+function initializeSocket() {
+    console.log('Initializing Socket.IO');
 
+    const token = getCookie('access_token_cookie');
+    const socketUrl = window.location.origin;
+
+    console.log('Connecting to WebSocket URL:', socketUrl);
+
+    socket = io(socketUrl, {
+        transports: ['websocket'],
+        auth: {
+            token: token
+        },
+        reconnection: true,
+        reconnectionAttempts: 5
+    });
+
+    socket.on('connect', function() {
+        console.log('Connected to WebSocket server');
+    });
+
+    socket.on('disconnect', function(reason) {
+        console.log('Disconnected from WebSocket server:', reason);
+        if (reason === 'io server disconnect') {
+            socket.auth.token = getCookie('access_token_cookie');
+            socket.connect();
+        }
+    });
+
+    socket.on('connect_error', function(error) {
+        console.error('Connection error:', error.message);
+        if (error.message === 'Unauthorized') {
+            fetch('/refresh', { method: 'POST', credentials: 'include' })
+                .then(refreshResponse => {
+                    if (!refreshResponse.ok) {
+                        throw new Error('Token refresh failed');
+                    }
+                    return refreshResponse.json();
+                })
+                .then(() => {
+                    socket.auth.token = getCookie('access_token_cookie');
+                    socket.connect();
+                })
+                .catch(() => {
+                    window.location.href = '/login';
+                });
+        }
+    });
+
+    socket.on('device_updated', function(device) {
+        console.log('Device update received:', device);
+        updateDeviceInList(device);
+    });
+
+    socket.on('devices_update', function(devices) {
+        console.log('Devices update received:', devices);
+        refreshDeviceList(devices);
+    });
+}
+
+function loadDevices() {
     const deviceList = document.getElementById('device-list');
-    const scanButton = document.getElementById('scan-button');
-    const loadingIndicator = document.getElementById('loading-indicator');
-
-    let socket;
-
-    function initializeSocket() {
-        console.log('Initializing Socket.IO');
-
-        const token = getCookie('access_token_cookie');
-        const socketUrl = window.location.origin;
-
-        console.log('Connecting to WebSocket URL:', socketUrl);
-
-        socket = io(socketUrl, {
-            transports: ['websocket'],
-            auth: {
-                token: token
-            },
-            reconnection: true,
-            reconnectionAttempts: 5
-        });
-
-        socket.on('connect', function() {
-            console.log('Connected to WebSocket server');
-        });
-
-        socket.on('disconnect', function(reason) {
-            console.log('Disconnected from WebSocket server:', reason);
-        });
-
-        socket.on('connect_error', function(error) {
-            console.error('Connection error:', error.message);
-            if (error.message === 'Unauthorized') {
-                window.location.href = '/login';
-            }
-        });
-
-        socket.on('device_updated', function(device) {
-            console.log('Device update received:', device);
-            updateDeviceInList(device);
-        });
-
-        socket.on('devices_update', function(devices) {
-            console.log('Devices update received:', devices);
+    if (!deviceList) return;
+    
+    showLoading();
+    fetchWithAuth('/api/devices')
+        .then(response => response.json())
+        .then(devices => {
             refreshDeviceList(devices);
-        });
-
-        socket.on('error', function(error) {
-            console.error('WebSocket error:', error);
-            if (error.message === 'Unauthorized') {
-                window.location.href = '/login';
+            hideLoading();
+        })
+        .catch(error => {
+            console.error('Error fetching devices:', error);
+            if (deviceList) {
+                deviceList.innerHTML = '<tr><td colspan="7">Error loading devices. Please try again.</td></tr>';
             }
+            hideLoading();
         });
+}
+
+function showLoading() {
+    const loadingIndicator = document.getElementById('loading-indicator');
+    if (loadingIndicator) {
+        loadingIndicator.style.display = 'block';
     }
+}
 
-    initializeSocket();
-
-    function showLoading() {
-        if (loadingIndicator) {
-            loadingIndicator.style.display = 'block';
-        }
+function hideLoading() {
+    const loadingIndicator = document.getElementById('loading-indicator');
+    if (loadingIndicator) {
+        loadingIndicator.style.display = 'none';
     }
+}
 
-    function hideLoading() {
-        if (loadingIndicator) {
-            loadingIndicator.style.display = 'none';
-        }
+function updateDeviceInList(device) {
+    const deviceRow = document.getElementById(`device-${device.id}`);
+    if (deviceRow) {
+        deviceRow.innerHTML = `
+            <td>${device.name}</td>
+            <td>${device.ip_address}</td>
+            <td>${device.mac_address}</td>
+            <td>${device.status ? 'Online' : 'Offline'}</td>
+            <td>${device.last_seen}</td>
+            <td>${(device.data_usage / (1024 * 1024)).toFixed(2)} MB</td>
+            <td>
+                <button class="btn ${device.blocked ? 'btn-success' : 'btn-danger'} btn-sm toggle-device" data-device-id="${device.id}">
+                    ${device.blocked ? 'Unblock' : 'Block'}
+                </button>
+            </td>
+        `;
+    } else {
+        refreshDeviceList([device]);
     }
+}
 
-    function updateDeviceInList(device) {
-        const deviceRow = document.getElementById(`device-${device.id}`);
-        if (deviceRow) {
-            deviceRow.innerHTML = `
+function refreshDeviceList(devices) {
+    const deviceList = document.getElementById('device-list');
+    if (!deviceList) return;
+    
+    if (devices.length === 0) {
+        deviceList.innerHTML = '<tr><td colspan="7">No devices found. Try scanning for new devices.</td></tr>';
+    } else {
+        deviceList.innerHTML = '';
+        devices.forEach(device => {
+            const row = document.createElement('tr');
+            row.id = `device-${device.id}`;
+            row.innerHTML = `
                 <td>${device.name}</td>
                 <td>${device.ip_address}</td>
                 <td>${device.mac_address}</td>
                 <td>${device.status ? 'Online' : 'Offline'}</td>
                 <td>${device.last_seen}</td>
-                <td>${(device.data_usage / 1024 / 1024).toFixed(2)} MB</td>
+                <td>${(device.data_usage / (1024 * 1024)).toFixed(2)} MB</td>
                 <td>
                     <button class="btn ${device.blocked ? 'btn-success' : 'btn-danger'} btn-sm toggle-device" data-device-id="${device.id}">
                         ${device.blocked ? 'Unblock' : 'Block'}
                     </button>
                 </td>
             `;
-        } else {
-            refreshDeviceList([device]);
-        }
+            deviceList.appendChild(row);
+        });
     }
+}
 
-    function refreshDeviceList(devices) {
-        if (!deviceList) return;
-        
-        if (devices.length === 0) {
-            deviceList.innerHTML = '<tr><td colspan="7">No devices found. Try scanning for new devices.</td></tr>';
-        } else {
-            deviceList.innerHTML = '';
-            devices.forEach(device => {
-                const row = document.createElement('tr');
-                row.id = `device-${device.id}`;
-                row.innerHTML = `
-                    <td>${device.name}</td>
-                    <td>${device.ip_address}</td>
-                    <td>${device.mac_address}</td>
-                    <td>${device.status ? 'Online' : 'Offline'}</td>
-                    <td>${device.last_seen}</td>
-                    <td>${(device.data_usage / 1024 / 1024).toFixed(2)} MB</td>
-                    <td>
-                        <button class="btn ${device.blocked ? 'btn-success' : 'btn-danger'} btn-sm toggle-device" data-device-id="${device.id}">
-                            ${device.blocked ? 'Unblock' : 'Block'}
-                        </button>
-                    </td>
-                `;
-                deviceList.appendChild(row);
-            });
-        }
-    }
-
-    function loadDevices() {
-        showLoading();
-        fetch('/api/devices')
-            .then(response => {
-                if (!response.ok) {
-                    throw response;
-                }
-                return response.json();
-            })
-            .then(devices => {
-                refreshDeviceList(devices);
-                hideLoading();
-            })
-            .catch(handleApiError)
-            .then(retryResponse => {
-                if (retryResponse) {
-                    return retryResponse.json();
-                }
-            })
-            .then(retriedDevices => {
-                if (retriedDevices) {
-                    refreshDeviceList(retriedDevices);
-                }
+function loadNetworkUsageData() {
+    const ctx = document.getElementById('networkUsageChart');
+    if (ctx) {
+        fetchWithAuth('/api/network_usage')
+            .then(response => response.json())
+            .then(data => {
+                renderNetworkUsageChart(ctx, data);
+                updateNetworkUsageStats(data);
             })
             .catch(error => {
-                console.error('Error fetching devices:', error);
-                if (deviceList) {
-                    deviceList.innerHTML = '<tr><td colspan="7">Error loading devices. Please try again.</td></tr>';
+                console.error('Error fetching network usage data:', error);
+                if (error.message === 'Unauthorized') {
+                    window.location.href = '/login';
                 }
-                hideLoading();
             });
     }
+}
+
+function renderNetworkUsageChart(ctx, data) {
+    new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: data.labels,
+            datasets: [{
+                label: 'Network Usage (MB)',
+                data: data.values,
+                borderColor: 'rgb(75, 192, 192)',
+                backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                tension: 0.1,
+                fill: true
+            }]
+        },
+        options: {
+            responsive: true,
+            scales: {
+                x: {
+                    title: {
+                        display: true,
+                        text: 'Time'
+                    }
+                },
+                y: {
+                    title: {
+                        display: true,
+                        text: 'Usage (MB)'
+                    },
+                    beginAtZero: true
+                }
+            },
+            plugins: {
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            let label = context.dataset.label || '';
+                            if (label) {
+                                label += ': ';
+                            }
+                            if (context.parsed.y !== null) {
+                                label += context.parsed.y.toFixed(2) + ' MB';
+                            }
+                            return label;
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
+function updateNetworkUsageStats(data) {
+    const totalUsage = data.values.reduce((a, b) => a + b, 0).toFixed(2);
+    const averageUsage = (totalUsage / data.values.length).toFixed(2);
+    const maxUsage = Math.max(...data.values).toFixed(2);
+
+    const statsContainer = document.getElementById('networkUsageStats');
+    if (statsContainer) {
+        statsContainer.innerHTML = `
+            <div class="card mb-3">
+                <div class="card-body">
+                    <h5 class="card-title">Network Usage Statistics</h5>
+                    <p class="card-text">Total Usage: ${totalUsage} MB</p>
+                    <p class="card-text">Average Hourly Usage: ${averageUsage} MB</p>
+                    <p class="card-text">Peak Usage: ${maxUsage} MB</p>
+                </div>
+            </div>
+        `;
+    }
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    console.log('DOM Content Loaded');
+    const path = window.location.pathname;
+    const isProtectedPage = ['/devices', '/network_usage'].includes(path);
+
+    if (isProtectedPage) {
+        if (checkAuthentication()) {
+            initializeSocket();
+            if (path === '/devices') {
+                loadDevices();
+            } else if (path === '/network_usage') {
+                loadNetworkUsageData();
+            }
+        }
+    }
+
+    const deviceList = document.getElementById('device-list');
+    const scanButton = document.getElementById('scan-button');
 
     if (scanButton) {
         scanButton.addEventListener('click', function() {
             showLoading();
-            fetch('/api/scan', { method: 'POST' })
-                .then(response => {
-                    if (!response.ok) {
-                        throw response;
-                    }
-                    return response.json();
-                })
+            fetchWithAuth('/api/scan', { method: 'POST' })
+                .then(response => response.json())
                 .then(result => {
                     if (result.success) {
                         loadDevices();
@@ -851,17 +1001,6 @@ document.addEventListener('DOMContentLoaded', function() {
                     }
                     hideLoading();
                 })
-                .catch(handleApiError)
-                .then(retryResponse => {
-                    if (retryResponse) {
-                        return retryResponse.json();
-                    }
-                })
-                .then(retriedResult => {
-                    if (retriedResult && retriedResult.success) {
-                        loadDevices();
-                    }
-                })
                 .catch(error => {
                     console.error('Error during scan:', error);
                     if (deviceList) {
@@ -871,8 +1010,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 });
         });
     }
-
-    loadDevices();
 
     if (deviceList) {
         deviceList.addEventListener('click', function(event) {
@@ -885,29 +1022,13 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 function toggleDevice(deviceId) {
-    fetch(`/api/devices/${deviceId}/toggle`, { method: 'POST' })
-        .then(response => {
-            if (!response.ok) {
-                throw response;
-            }
-            return response.json();
-        })
+    fetchWithAuth(`/api/devices/${deviceId}/toggle`, { method: 'POST' })
+        .then(response => response.json())
         .then(result => {
             if (result.success) {
                 console.log(`Device ${deviceId} toggled successfully`);
             } else {
                 console.error('Error toggling device:', result.error);
-            }
-        })
-        .catch(handleApiError)
-        .then(retryResponse => {
-            if (retryResponse) {
-                return retryResponse.json();
-            }
-        })
-        .then(retriedResult => {
-            if (retriedResult && retriedResult.success) {
-                console.log(`Device ${deviceId} toggled successfully after retry`);
             }
         })
         .catch(error => {
@@ -1069,6 +1190,9 @@ Contents of ./templates/base.html:
                     <li class="nav-item">
                         <a class="nav-link" href="{{ url_for('main.network_usage') }}">Network Usage</a>
                     </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('main.logout') }}">Logout</a>
+                    </li>
                 </ul>
             </div>
         </div>
@@ -1089,18 +1213,37 @@ Contents of ./templates/base.html:
 File: ./templates/network_usage.html
 --------------------------------------------------
 Contents of ./templates/network_usage.html:
-
 {% extends "base.html" %}
 
 {% block content %}
 <h2>Network Usage Analytics</h2>
 
 <div class="row mb-4">
-    <div class="col-md-6">
+    <div class="col-md-4">
         <div class="card">
             <div class="card-body">
                 <h5 class="card-title">Total Network Usage</h5>
-                <p class="card-text">{{ (total_network_usage / (1024 * 1024)) | round(2) }} MB</p>
+                <p class="card-text display-6">{{ (total_network_usage / (1024 * 1024)) | round(2) }} MB</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">Top 5 Devices by Usage</h5>
+                <div class="list-group">
+                    {% for device in top_devices %}
+                    <div class="list-group-item d-flex justify-content-between align-items-center">
+                        <div>
+                            <h6 class="mb-0">{{ device.name }}</h6>
+                            <small class="text-muted">{{ device.ip_address }}</small>
+                        </div>
+                        <span class="badge bg-primary rounded-pill">
+                            {{ (device.total_usage / (1024 * 1024)) | round(2) }} MB
+                        </span>
+                    </div>
+                    {% endfor %}
+                </div>
             </div>
         </div>
     </div>
@@ -1108,83 +1251,62 @@ Contents of ./templates/network_usage.html:
 
 <div class="row mb-4">
     <div class="col-md-12">
-        <h3>Hourly Network Usage (Last 24 Hours)</h3>
-        <canvas id="hourlyUsageChart"></canvas>
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">Hourly Network Usage (Last 24 Hours)</h5>
+                <canvas id="networkUsageChart"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-md-12" id="networkUsageStats">
+        <!-- Network usage statistics will be populated by JavaScript -->
     </div>
 </div>
 
 <div class="row">
     <div class="col-md-12">
-        <h3>Device Usage</h3>
-        <table class="table table-striped">
-            <thead>
-                <tr>
-                    <th>Device Name</th>
-                    <th>IP Address</th>
-                    <th>MAC Address</th>
-                    <th>Total Usage</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for device in devices %}
-                <tr>
-                    <td>{{ device.name }}</td>
-                    <td>{{ device.ip_address }}</td>
-                    <td>{{ device.mac_address }}</td>
-                    <td>{{ (device.total_usage / (1024 * 1024)) | round(2) }} MB</td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">All Devices Usage</h5>
+                <div class="table-responsive">
+                    <table class="table table-striped">
+                        <thead>
+                            <tr>
+                                <th>Device Name</th>
+                                <th>IP Address</th>
+                                <th>MAC Address</th>
+                                <th>Status</th>
+                                <th>Total Usage</th>
+                                <th>Last Seen</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for device in devices %}
+                            <tr>
+                                <td>{{ device.name }}</td>
+                                <td>{{ device.ip_address }}</td>
+                                <td>{{ device.mac_address }}</td>
+                                <td>
+                                    <span class="badge bg-{{ device.status and 'success' or 'danger' }}">
+                                        {{ device.status and 'Online' or 'Offline' }}
+                                    </span>
+                                </td>
+                                <td>{{ (device.total_usage / (1024 * 1024)) | round(2) }} MB</td>
+                                <td>{{ device.last_seen.strftime('%Y-%m-%d %H:%M:%S') if device.last_seen else 'Never' }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
     </div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<script>
-    document.addEventListener('DOMContentLoaded', function() {
-        var ctx = document.getElementById('hourlyUsageChart').getContext('2d');
-        var hourlyData = {{ hourly_data | tojson }};
-        
-        var labels = hourlyData.map(function(item) {
-            return new Date(item.hour).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-        });
-        
-        var data = hourlyData.map(function(item) {
-            return item.usage / (1024 * 1024); // Convert to MB
-        });
-        
-        new Chart(ctx, {
-            type: 'line',
-            data: {
-                labels: labels,
-                datasets: [{
-                    label: 'Network Usage (MB)',
-                    data: data,
-                    borderColor: 'rgb(75, 192, 192)',
-                    tension: 0.1
-                }]
-            },
-            options: {
-                responsive: true,
-                scales: {
-                    x: {
-                        title: {
-                            display: true,
-                            text: 'Time'
-                        }
-                    },
-                    y: {
-                        title: {
-                            display: true,
-                            text: 'Usage (MB)'
-                        },
-                        beginAtZero: true
-                    }
-                }
-            }
-        });
-    });
-</script>
 {% endblock %}
 
 --------------------------------------------------

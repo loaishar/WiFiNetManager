@@ -6,81 +6,36 @@ function getCookie(name) {
     if (parts.length === 2) return parts.pop().split(';').shift();
 }
 
-function checkAuthentication() {
-    console.log('Checking authentication on path:', window.location.pathname);
-    const token = getCookie('access_token_cookie');
-    console.log('Token found:', token ? 'Yes' : 'No');
-    
-    const isLoginPage = window.location.pathname === '/login';
-    const isRegisterPage = window.location.pathname === '/register';
-    const isHomePage = window.location.pathname === '/';
-    
-    if (isLoginPage || isRegisterPage || isHomePage) {
-        console.log('On public page, no authentication needed');
-        return true;
-    }
-    
-    if (!token) {
-        console.log('No token found, redirecting to login');
-        window.location.href = '/login';
-        return false;
-    }
-    
-    console.log('Token found, authentication successful');
-    return true;
-}
-
 function fetchWithAuth(url, options = {}) {
-    console.log('Fetching with auth:', url);
     options.credentials = 'include';
 
     return fetch(url, options)
         .then(response => {
             console.log('Response status:', response.status);
             if (response.status === 401) {
-                console.log('Token expired, attempting to refresh');
-                return fetch('/refresh', { 
-                    method: 'POST', 
-                    credentials: 'include'
-                })
-                .then(refreshResponse => {
-                    console.log('Refresh response status:', refreshResponse.status);
-                    if (!refreshResponse.ok) {
-                        throw new Error('Token refresh failed');
-                    }
-                    return refreshResponse.json();
-                })
-                .then(() => {
-                    console.log('Token refreshed successfully');
-                    return fetch(url, options);
-                })
-                .catch(refreshError => {
-                    console.error('Error refreshing token:', refreshError);
-                    if (window.location.pathname !== '/login') {
-                        window.location.href = '/login';
-                    }
-                    throw refreshError;
-                });
+                window.location.href = '/login';
+                throw new Error('Unauthorized');
             }
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
             }
             return response;
+        })
+        .catch(error => {
+            console.error('Error during fetch:', error);
+            throw error;
         });
 }
 
 function initializeSocket() {
     console.log('Initializing Socket.IO');
-
-    const token = getCookie('access_token_cookie');
     const socketUrl = window.location.origin;
-
     console.log('Connecting to WebSocket URL:', socketUrl);
 
     socket = io(socketUrl, {
         transports: ['websocket'],
         auth: {
-            token: token
+            token: getCookie('access_token_cookie')
         },
         reconnection: true,
         reconnectionAttempts: 5
@@ -92,29 +47,12 @@ function initializeSocket() {
 
     socket.on('disconnect', function(reason) {
         console.log('Disconnected from WebSocket server:', reason);
-        if (reason === 'io server disconnect') {
-            socket.auth.token = getCookie('access_token_cookie');
-            socket.connect();
-        }
     });
 
     socket.on('connect_error', function(error) {
         console.error('Connection error:', error.message);
         if (error.message === 'Unauthorized') {
-            fetch('/refresh', { method: 'POST', credentials: 'include' })
-                .then(refreshResponse => {
-                    if (!refreshResponse.ok) {
-                        throw new Error('Token refresh failed');
-                    }
-                    return refreshResponse.json();
-                })
-                .then(() => {
-                    socket.auth.token = getCookie('access_token_cookie');
-                    socket.connect();
-                })
-                .catch(() => {
-                    window.location.href = '/login';
-                });
+            window.location.href = '/login';
         }
     });
 
@@ -224,9 +162,6 @@ function loadNetworkUsageData() {
             })
             .catch(error => {
                 console.error('Error fetching network usage data:', error);
-                if (error.message === 'Unauthorized') {
-                    window.location.href = '/login';
-                }
             });
     }
 }
@@ -308,13 +243,11 @@ document.addEventListener('DOMContentLoaded', function() {
     const isProtectedPage = ['/devices', '/network_usage'].includes(path);
 
     if (isProtectedPage) {
-        if (checkAuthentication()) {
-            initializeSocket();
-            if (path === '/devices') {
-                loadDevices();
-            } else if (path === '/network_usage') {
-                loadNetworkUsageData();
-            }
+        initializeSocket();
+        if (path === '/devices') {
+            loadDevices();
+        } else if (path === '/network_usage') {
+            loadNetworkUsageData();
         }
     }
 

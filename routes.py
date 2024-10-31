@@ -5,13 +5,12 @@ from flask_jwt_extended import (
     verify_jwt_in_request
 )
 from extensions import db, jwt, socketio
-from models import User, Device, NetworkUsage, NetworkSettings
-from network_scanner import scan_network
+from models import User, Device, NetworkUsage, NetworkSettings, TotalNetworkUsage
+from network_scanner import scan_network, get_total_network_usage
 import logging
 from datetime import datetime, timedelta
 from flask_socketio import emit
 from sqlalchemy import func, desc
-import random
 import eventlet
 from functools import wraps
 
@@ -49,24 +48,8 @@ def load_logged_in_user():
     except Exception:
         g.user = None
 
-@main.route('/api/check_first_user')
-def check_first_user():
-    try:
-        first_user = User.query.order_by(User.id.asc()).first()
-        if first_user:
-            return jsonify({
-                'username': first_user.username,
-                'is_admin': first_user.is_admin,
-                'message': f'The first registered user (admin) is: {first_user.username}'
-            })
-        return jsonify({'error': 'No users found in the database'}), 404
-    except Exception as e:
-        logging.error(f"Error checking first user: {str(e)}")
-        return jsonify({'error': 'Internal server error'}), 500
-
 @main.route('/')
 def index():
-    logging.info("Accessing index route")
     return render_template('index.html')
 
 @main.route('/register', methods=['GET', 'POST'])
@@ -82,9 +65,6 @@ def register():
             user.set_password(password)
             db.session.add(user)
             db.session.commit()
-            
-            if is_admin:
-                logging.info(f"First user {username} registered as admin")
             return redirect(url_for('main.login'))
         except Exception as e:
             logging.error(f"Error during registration: {str(e)}")
@@ -95,7 +75,6 @@ def register():
 
 @main.route('/login', methods=['GET', 'POST'])
 def login():
-    logging.info("Accessing login route")
     if request.method == 'POST':
         username = request.form['username']
         password = request.form['password']
@@ -113,7 +92,6 @@ def login():
             set_refresh_cookies(response, refresh_token)
             return response
         else:
-            logging.warning(f"Failed login attempt for user {username}")
             flash('Invalid username or password', 'error')
     
     return render_template('login.html')
@@ -131,7 +109,6 @@ def refresh():
         
         response = jsonify({'msg': 'Token refreshed successfully'})
         set_access_cookies(response, access_token)
-        
         return response
     except Exception as e:
         logging.error(f"Error refreshing token: {str(e)}")
@@ -140,7 +117,6 @@ def refresh():
 @main.route('/logout')
 @jwt_required(optional=True)
 def logout():
-    logging.info("User logged out")
     response = make_response(redirect(url_for('main.login')))
     unset_jwt_cookies(response)
     return response
@@ -148,20 +124,13 @@ def logout():
 @main.route('/devices')
 @jwt_required()
 def devices():
-    logging.info("Accessing devices route")
-    current_user = get_jwt_identity()
-    logging.info(f"User {current_user} accessing devices page")
     return render_template('devices.html')
 
 @main.route('/api/devices', methods=['GET'])
 @jwt_required()
 def get_devices():
-    logging.info("Fetching devices")
-    current_user = get_jwt_identity()
-    logging.info(f"User {current_user} fetching devices")
     try:
         devices = Device.query.all()
-        logging.debug(f"Found {len(devices)} devices")
         return jsonify([{
             'id': device.id,
             'name': device.name,
@@ -179,8 +148,6 @@ def get_devices():
 @main.route('/api/devices/<int:device_id>/toggle', methods=['POST'])
 @jwt_required()
 def toggle_device(device_id):
-    current_user = get_jwt_identity()
-    logging.info(f"User {current_user} toggling device {device_id}")
     try:
         device = Device.query.get_or_404(device_id)
         device.blocked = not device.blocked
@@ -198,7 +165,6 @@ def toggle_device(device_id):
         }
         
         emit('device_updated', device_data, broadcast=True, namespace='/')
-        logging.info(f'Device {device_id} toggled. New blocked status: {device.blocked}')
         return jsonify({'success': True, 'blocked': device.blocked})
     except Exception as e:
         logging.error(f'Error toggling device {device_id}: {str(e)}')
@@ -221,7 +187,7 @@ def scan():
                 existing_device.ip_address = device_data['ip_address']
                 existing_device.status = device_data['status']
                 existing_device.last_seen = device_data['last_seen']
-                existing_device.update_data_usage(random.randint(1000000, 10000000))
+                existing_device.update_data_usage()
             else:
                 logging.debug(f"Adding new device: {device_data['name']}")
                 new_device = Device(
@@ -229,12 +195,12 @@ def scan():
                     ip_address=device_data['ip_address'],
                     mac_address=device_data['mac_address'],
                     status=device_data['status'],
-                    blocked=device_data['blocked'],
+                    blocked=False,
                     last_seen=device_data['last_seen']
                 )
                 db.session.add(new_device)
-        db.session.commit()
         
+        db.session.commit()
         devices = Device.query.all()
         devices_data = [{
             'id': device.id,
@@ -248,8 +214,6 @@ def scan():
         } for device in devices]
         
         emit('devices_update', devices_data, broadcast=True, namespace='/')
-        logging.info(f"Emitted 'devices_update' event with {len(devices)} devices")
-        
         return jsonify({'success': True})
     except Exception as e:
         logging.error(f"Error during device scan: {str(e)}")
@@ -260,33 +224,25 @@ def scan():
 @jwt_required()
 def network_usage():
     try:
-        current_user = get_jwt_identity()
-        logging.info(f"User {current_user} accessing network usage page")
-        
         devices = Device.query.all()
-        
-        for device in devices:
-            device.total_usage = db.session.query(func.sum(NetworkUsage.data_used)).filter(NetworkUsage.device_id == device.id).scalar() or 0
-        
-        total_network_usage = sum(device.total_usage for device in devices)
+        total_usage = db.session.query(func.sum(TotalNetworkUsage.bytes_sent + TotalNetworkUsage.bytes_recv)).scalar() or 0
         
         end_time = datetime.utcnow()
         start_time = end_time - timedelta(days=1)
+        
         hourly_usage = db.session.query(
-            func.date_trunc('hour', NetworkUsage.timestamp).label('hour'),
-            func.sum(NetworkUsage.data_used).label('usage')
-        ).filter(NetworkUsage.timestamp.between(start_time, end_time)
+            func.date_trunc('hour', TotalNetworkUsage.timestamp).label('hour'),
+            func.sum(TotalNetworkUsage.bytes_sent + TotalNetworkUsage.bytes_recv).label('usage')
+        ).filter(
+            TotalNetworkUsage.timestamp.between(start_time, end_time)
         ).group_by('hour').order_by('hour').all()
         
         hourly_data = [{'hour': entry.hour.isoformat(), 'usage': entry.usage} for entry in hourly_usage]
         
-        top_devices = sorted(devices, key=lambda x: x.total_usage, reverse=True)[:5]
-        
         return render_template('network_usage.html',
                              devices=devices,
-                             total_network_usage=total_network_usage,
-                             hourly_data=hourly_data,
-                             top_devices=top_devices)
+                             total_network_usage=total_usage,
+                             hourly_data=hourly_data)
     except Exception as e:
         logging.error(f"Error accessing network usage page: {str(e)}")
         return jsonify({'error': 'Internal server error'}), 500
@@ -295,27 +251,27 @@ def network_usage():
 @jwt_required()
 def get_network_usage():
     try:
-        current_user = get_jwt_identity()
         time_range = request.args.get('range', '24h')
-        
         end_time = datetime.utcnow()
+        
         if time_range == '7d':
             start_time = end_time - timedelta(days=7)
             interval = 'hour'
         elif time_range == '30d':
             start_time = end_time - timedelta(days=30)
             interval = 'day'
-        else:
+        else:  # 24h
             start_time = end_time - timedelta(days=1)
             interval = 'hour'
 
         usage_data = db.session.query(
-            func.date_trunc(interval, NetworkUsage.timestamp).label('interval'),
-            func.sum(NetworkUsage.data_used).label('usage')
+            func.date_trunc(interval, TotalNetworkUsage.timestamp).label('interval'),
+            func.sum(TotalNetworkUsage.bytes_sent + TotalNetworkUsage.bytes_recv).label('usage')
         ).filter(
-            NetworkUsage.timestamp.between(start_time, end_time)
+            TotalNetworkUsage.timestamp.between(start_time, end_time)
         ).group_by('interval').order_by('interval').all()
 
+        # Calculate statistics
         total_usage = sum(entry.usage for entry in usage_data) if usage_data else 0
         peak_usage = max((entry.usage for entry in usage_data), default=0)
         peak_time = next(
@@ -323,6 +279,7 @@ def get_network_usage():
             None
         )
 
+        # Calculate trend
         if len(usage_data) > 1:
             first_half = sum(entry.usage for entry in usage_data[:len(usage_data)//2])
             second_half = sum(entry.usage for entry in usage_data[len(usage_data)//2:])
@@ -330,18 +287,7 @@ def get_network_usage():
         else:
             trend = 0
 
-        previous_start = start_time - (end_time - start_time)
-        previous_usage = db.session.query(
-            func.sum(NetworkUsage.data_used)
-        ).filter(
-            NetworkUsage.timestamp.between(previous_start, start_time)
-        ).scalar() or 0
-
-        period_comparison = (
-            ((total_usage - previous_usage) / previous_usage * 100)
-            if previous_usage > 0 else 0
-        )
-
+        # Get device-specific usage data
         devices = Device.query.all()
         device_usage = []
         for device in devices:
@@ -354,18 +300,17 @@ def get_network_usage():
 
             device_usage.append({
                 'name': device.name,
-                'usage': float(device_data.total_usage or 0) / (1024 * 1024)
+                'usage': float(device_data.total_usage or 0) / (1024 * 1024)  # Convert to MB
             })
 
         response_data = {
             'labels': [entry.interval.isoformat() for entry in usage_data],
-            'values': [float(entry.usage or 0) / (1024 * 1024) for entry in usage_data],
+            'values': [float(entry.usage) / (1024 * 1024) for entry in usage_data],  # Convert to MB
             'devices': sorted(device_usage, key=lambda x: x['usage'], reverse=True),
             'statistics': {
                 'total_usage': float(total_usage) / (1024 * 1024),
                 'peak_usage_time': peak_time.strftime('%Y-%m-%d %H:%M') if peak_time else None,
-                'trend': trend,
-                'period_comparison': period_comparison
+                'trend': trend
             }
         }
 
@@ -381,8 +326,7 @@ def admin_dashboard():
         total_devices = Device.query.count()
         active_devices = Device.query.filter_by(status=True).count()
         blocked_devices = Device.query.filter_by(blocked=True).count()
-        
-        total_usage = db.session.query(func.sum(NetworkUsage.data_used)).scalar() or 0
+        total_usage = db.session.query(func.sum(TotalNetworkUsage.bytes_sent + TotalNetworkUsage.bytes_recv)).scalar() or 0
         
         devices = Device.query.all()
         network_settings = NetworkSettings.query.all()

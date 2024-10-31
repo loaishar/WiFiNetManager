@@ -1,6 +1,7 @@
 from extensions import db
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
+import psutil
 
 class User(db.Model):
     __tablename__ = 'users'
@@ -30,13 +31,26 @@ class Device(db.Model):
     bandwidth_limit = db.Column(db.Integer, default=0)  # Bandwidth limit in Mbps (0 = unlimited)
     notes = db.Column(db.Text, nullable=True)  # Admin notes about the device
 
-    def update_data_usage(self, bytes_used):
-        if self.data_usage is None:
-            self.data_usage = 0
-        self.data_usage += bytes_used
-        self.last_usage_update = datetime.utcnow()
-        new_usage = NetworkUsage(device_id=self.id, data_used=bytes_used)
-        db.session.add(new_usage)
+    def update_data_usage(self, bytes_used=None):
+        try:
+            # Get real network interface statistics for this device
+            device_stats = psutil.net_io_counters(pernic=True)
+            total_bytes = 0
+            for interface, stats in device_stats.items():
+                total_bytes += stats.bytes_sent + stats.bytes_recv
+            
+            if total_bytes > 0:
+                if self.data_usage is None:
+                    self.data_usage = 0
+                # Calculate the difference since last update
+                bytes_diff = total_bytes - self.data_usage
+                if bytes_diff > 0:
+                    self.data_usage = total_bytes
+                    self.last_usage_update = datetime.utcnow()
+                    new_usage = NetworkUsage(device_id=self.id, data_used=bytes_diff)
+                    db.session.add(new_usage)
+        except Exception as e:
+            logging.error(f"Error updating device usage: {str(e)}")
 
     def get_hourly_usage(self):
         hourly_usage = db.session.query(

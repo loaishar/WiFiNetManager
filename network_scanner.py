@@ -7,6 +7,8 @@ from datetime import datetime, timedelta
 import socket
 import threading
 import time
+import os
+from flask import current_app
 
 def get_network_interfaces():
     """Get all active network interfaces."""
@@ -37,6 +39,49 @@ def get_device_name(ip):
     except:
         return f"Device-{ip.split('.')[-1]}"
 
+def get_device_status(ip):
+    """Check if device is reachable."""
+    try:
+        return os.system(f"ping -c 1 -W 1 {ip} > /dev/null 2>&1") == 0
+    except:
+        return False
+
+def arp_scan(ip_range):
+    """Perform ARP scan to discover devices."""
+    try:
+        # Create ARP request packet
+        arp_request = scapy.ARP(pdst=ip_range)
+        broadcast = scapy.Ether(dst="ff:ff:ff:ff:ff:ff")
+        arp_request_broadcast = broadcast/arp_request
+        
+        # Send packet and get response
+        answered_list = scapy.srp(arp_request_broadcast, timeout=3, verbose=False)[0]
+        
+        devices = []
+        for element in answered_list:
+            # Get real device info
+            ip = element[1].psrc
+            mac = element[1].hwsrc
+            
+            # Try to get real device name and status
+            name = get_device_name(ip)
+            status = get_device_status(ip)
+            
+            device = {
+                'ip_address': ip,
+                'mac_address': mac,
+                'name': name,
+                'status': status,
+                'blocked': False,
+                'last_seen': datetime.utcnow()
+            }
+            devices.append(device)
+            
+        return devices
+    except Exception as e:
+        logging.error(f"Error during ARP scan: {str(e)}")
+        return []
+
 def get_total_network_usage():
     """Get total network usage for all interfaces."""
     try:
@@ -60,31 +105,6 @@ def get_total_network_usage():
         logging.error(f"Error getting total network usage: {str(e)}")
         return None
 
-def arp_scan(ip_range):
-    """Perform ARP scan to discover devices."""
-    try:
-        arp_request = scapy.ARP(pdst=ip_range)
-        broadcast = scapy.Ether(dst="ff:ff:ff:ff:ff:ff")
-        arp_request_broadcast = broadcast/arp_request
-        
-        answered_list = scapy.srp(arp_request_broadcast, timeout=3, verbose=False)[0]
-        
-        devices = []
-        for element in answered_list:
-            device = {
-                'ip_address': element[1].psrc,
-                'mac_address': element[1].hwsrc,
-                'name': get_device_name(element[1].psrc),
-                'status': True,
-                'blocked': False,
-                'last_seen': datetime.utcnow()
-            }
-            devices.append(device)
-        return devices
-    except Exception as e:
-        logging.error(f"Error during ARP scan: {str(e)}")
-        return []
-
 def scan_network():
     """Scan network and return list of devices."""
     logging.info("Starting network scan")
@@ -95,27 +115,30 @@ def scan_network():
 
 def start_total_usage_monitoring():
     """Start background thread to monitor total network usage."""
-    from extensions import db
-    from models import TotalNetworkUsage
-
     def monitor():
         logging.info("Starting network usage monitoring")
         while True:
             try:
-                usage = get_total_network_usage()
-                if usage:
-                    total_usage = TotalNetworkUsage(
-                        timestamp=usage['timestamp'],
-                        bytes_sent=usage['bytes_sent'],
-                        bytes_recv=usage['bytes_recv']
-                    )
-                    db.session.add(total_usage)
-                    db.session.commit()
-                    logging.debug(f"Recorded network usage: sent={usage['bytes_sent']}, recv={usage['bytes_recv']}")
+                with current_app.app_context():
+                    from extensions import db
+                    from models import TotalNetworkUsage
+                    
+                    usage = get_total_network_usage()
+                    if usage:
+                        total_usage = TotalNetworkUsage(
+                            timestamp=usage['timestamp'],
+                            bytes_sent=usage['bytes_sent'],
+                            bytes_recv=usage['bytes_recv']
+                        )
+                        db.session.add(total_usage)
+                        db.session.commit()
+                        logging.debug(f"Recorded network usage: sent={usage['bytes_sent']}, recv={usage['bytes_recv']}")
             except Exception as e:
                 logging.error(f"Error in network monitoring: {str(e)}")
-                if 'db' in locals():
+                try:
                     db.session.rollback()
+                except:
+                    pass
             time.sleep(60)  # Update every minute
 
     monitor_thread = threading.Thread(target=monitor, daemon=True)

@@ -1,6 +1,22 @@
 // Admin Dashboard JavaScript
 
 document.addEventListener('DOMContentLoaded', function() {
+    // Check first user info
+    fetch('/api/check_first_user')
+        .then(response => response.json())
+        .then(data => {
+            if (data.message) {
+                const alert = document.createElement('div');
+                alert.className = 'alert alert-info alert-dismissible fade show';
+                alert.innerHTML = `
+                    ${data.message}
+                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                `;
+                document.querySelector('.container-fluid').insertBefore(alert, document.querySelector('.container-fluid').firstChild);
+            }
+        })
+        .catch(error => console.error('Error fetching first user:', error));
+
     // Initialize tooltips
     var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'))
     var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {

@@ -34,6 +34,21 @@ def admin_required(fn):
             return redirect(url_for('main.login'))
     return wrapper
 
+@main.route('/api/check_first_user')
+def check_first_user():
+    try:
+        first_user = User.query.order_by(User.id.asc()).first()
+        if first_user:
+            return jsonify({
+                'username': first_user.username,
+                'is_admin': first_user.is_admin,
+                'message': f'The first registered user (admin) is: {first_user.username}'
+            })
+        return jsonify({'error': 'No users found in the database'}), 404
+    except Exception as e:
+        logging.error(f"Error checking first user: {str(e)}")
+        return jsonify({'error': 'Internal server error'}), 500
+
 @main.route('/')
 def index():
     logging.info("Accessing index route")
@@ -47,7 +62,6 @@ def register():
         password = request.form['password']
 
         try:
-            # Make the first user an admin
             is_admin = User.query.count() == 0
             user = User(username=username, email=email, is_admin=is_admin)
             user.set_password(password)

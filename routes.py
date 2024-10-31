@@ -1,4 +1,4 @@
-from flask import Blueprint, render_template, request, jsonify, redirect, url_for, flash, make_response, current_app
+from flask import Blueprint, render_template, request, jsonify, redirect, url_for, flash, make_response, current_app, g
 from flask_jwt_extended import (
     create_access_token, create_refresh_token, jwt_required, get_jwt_identity,
     set_access_cookies, set_refresh_cookies, unset_jwt_cookies, get_jwt,
@@ -33,6 +33,21 @@ def admin_required(fn):
             logging.error(f"Admin access error: {str(e)}")
             return redirect(url_for('main.login'))
     return wrapper
+
+@main.before_request
+def load_logged_in_user():
+    try:
+        verify_jwt_in_request(optional=True)
+        claims = get_jwt()
+        if claims:
+            g.user = {
+                'id': get_jwt_identity(),
+                'is_admin': claims.get('is_admin', False)
+            }
+        else:
+            g.user = None
+    except Exception:
+        g.user = None
 
 @main.route('/api/check_first_user')
 def check_first_user():
@@ -108,7 +123,11 @@ def login():
 def refresh():
     try:
         current_user = get_jwt_identity()
-        access_token = create_access_token(identity=current_user)
+        user = User.query.get(current_user)
+        access_token = create_access_token(
+            identity=current_user,
+            additional_claims={'is_admin': user.is_admin}
+        )
         
         response = jsonify({'msg': 'Token refreshed successfully'})
         set_access_cookies(response, access_token)

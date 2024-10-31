@@ -19,13 +19,14 @@
                     <li class="nav-item">
                         <a class="nav-link" href="{{ url_for('main.index') }}">Home</a>
                     </li>
+                    {% if g.user %}
                     <li class="nav-item">
                         <a class="nav-link" href="{{ url_for('main.devices') }}">Devices</a>
                     </li>
                     <li class="nav-item">
                         <a class="nav-link" href="{{ url_for('main.network_usage') }}">Network Usage</a>
                     </li>
-                    {% if current_user and current_user.is_admin %}
+                    {% if g.user and g.user.is_admin %}
                     <li class="nav-item">
                         <a class="nav-link" href="{{ url_for('main.admin_dashboard') }}">Admin Dashboard</a>
                     </li>
@@ -33,6 +34,14 @@
                     <li class="nav-item">
                         <a class="nav-link" href="{{ url_for('main.logout') }}">Logout</a>
                     </li>
+                    {% else %}
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('main.login') }}">Login</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('main.register') }}">Register</a>
+                    </li>
+                    {% endif %}
                 </ul>
             </div>
         </div>

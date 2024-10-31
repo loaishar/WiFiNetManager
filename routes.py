@@ -221,7 +221,8 @@ def scan():
                 existing_device.ip_address = device_data['ip_address']
                 existing_device.status = device_data['status']
                 existing_device.last_seen = device_data['last_seen']
-                existing_device.update_data_usage(random.randint(1000000, 10000000))
+                if 'data_usage' in device_data:
+                    existing_device.update_data_usage(device_data['data_usage'])
             else:
                 logging.debug(f"Adding new device: {device_data['name']}")
                 new_device = Device(
@@ -232,7 +233,10 @@ def scan():
                     blocked=device_data['blocked'],
                     last_seen=device_data['last_seen']
                 )
+                if 'data_usage' in device_data:
+                    new_device.data_usage = device_data['data_usage']
                 db.session.add(new_device)
+        
         db.session.commit()
         
         devices = Device.query.all()

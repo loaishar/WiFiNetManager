@@ -110,7 +110,17 @@ def scan_network():
     logging.info("Starting network scan")
     ip_range = get_ip_network()
     devices = arp_scan(ip_range)
+    
     logging.info(f"Found {len(devices)} devices")
+    for device in devices:
+        try:
+            # Get real device status using ping
+            device['status'] = get_device_status(device['ip_address'])
+            # Try to get real device name using DNS
+            device['name'] = get_device_name(device['ip_address'])
+        except Exception as e:
+            logging.error(f"Error getting device details: {str(e)}")
+    
     return devices
 
 def start_total_usage_monitoring():
@@ -119,18 +129,27 @@ def start_total_usage_monitoring():
         logging.info("Starting network usage monitoring")
         while True:
             try:
-                with current_app.app_context():
+                app = current_app._get_current_object()
+                with app.app_context():
                     from extensions import db
-                    from models import TotalNetworkUsage
+                    from models import TotalNetworkUsage, Device
                     
+                    # Get real network usage data
                     usage = get_total_network_usage()
                     if usage:
+                        # Store total network usage
                         total_usage = TotalNetworkUsage(
                             timestamp=usage['timestamp'],
                             bytes_sent=usage['bytes_sent'],
                             bytes_recv=usage['bytes_recv']
                         )
                         db.session.add(total_usage)
+                        
+                        # Update individual device usage
+                        devices = Device.query.all()
+                        for device in devices:
+                            device.update_data_usage()
+                        
                         db.session.commit()
                         logging.debug(f"Recorded network usage: sent={usage['bytes_sent']}, recv={usage['bytes_recv']}")
             except Exception as e:

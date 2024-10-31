@@ -1,7 +1,8 @@
 from flask import Blueprint, render_template, request, jsonify, redirect, url_for, flash, make_response
 from flask_jwt_extended import (
     create_access_token, create_refresh_token, jwt_required, get_jwt_identity,
-    set_access_cookies, set_refresh_cookies, unset_jwt_cookies, get_jwt
+    set_access_cookies, set_refresh_cookies, unset_jwt_cookies, get_jwt,
+    verify_jwt_in_request
 )
 from extensions import db, jwt, socketio
 from models import User, Device, NetworkUsage
@@ -10,6 +11,7 @@ import logging
 from datetime import datetime, timedelta
 from flask_socketio import emit
 from sqlalchemy import func
+import random
 
 main = Blueprint('main', __name__)
 
@@ -48,16 +50,20 @@ def login():
     if request.method == 'POST':
         username = request.form['username']
         password = request.form['password']
-
+        
         user = User.query.filter_by(username=username).first()
         if user and user.check_password(password):
+            # Create tokens with longer expiration
             access_token = create_access_token(
                 identity=user.id,
                 expires_delta=timedelta(hours=1)
             )
             refresh_token = create_refresh_token(identity=user.id)
             
+            # Create response with proper redirect
             response = make_response(redirect(url_for('main.devices')))
+            
+            # Set cookie attributes
             set_access_cookies(response, access_token)
             set_refresh_cookies(response, refresh_token)
             
@@ -68,7 +74,7 @@ def login():
         else:
             logging.warning(f"Failed login attempt for user {username}")
             flash('Invalid username or password', 'error')
-
+    
     return render_template('login.html')
 
 @main.route('/refresh', methods=['POST'])
@@ -171,6 +177,8 @@ def scan():
                 existing_device.ip_address = device_data['ip_address']
                 existing_device.status = device_data['status']
                 existing_device.last_seen = device_data['last_seen']
+                # Update data usage randomly for demo purposes
+                existing_device.update_data_usage(random.randint(1000000, 10000000))  # 1-10 MB
             else:
                 logging.debug(f"Adding new device: {device_data['name']}")
                 new_device = Device(
@@ -211,16 +219,16 @@ def network_usage():
     try:
         current_user = get_jwt_identity()
         logging.info(f"User {current_user} accessing network usage page")
-        token = get_jwt()
-        logging.info(f"Token present: {bool(token)}")
         
         devices = Device.query.all()
         
+        # Calculate total usage for each device
         for device in devices:
             device.total_usage = db.session.query(func.sum(NetworkUsage.data_used)).filter(NetworkUsage.device_id == device.id).scalar() or 0
         
         total_network_usage = sum(device.total_usage for device in devices)
         
+        # Get hourly usage data for the last 24 hours
         end_time = datetime.utcnow()
         start_time = end_time - timedelta(days=1)
         hourly_usage = db.session.query(
@@ -231,10 +239,14 @@ def network_usage():
         
         hourly_data = [{'hour': entry.hour.isoformat(), 'usage': entry.usage} for entry in hourly_usage]
         
-        return render_template('network_usage.html', 
-                               devices=devices, 
-                               total_network_usage=total_network_usage,
-                               hourly_data=hourly_data)
+        # Get top devices by usage
+        top_devices = sorted(devices, key=lambda x: x.total_usage, reverse=True)[:5]
+        
+        return render_template('network_usage.html',
+                             devices=devices,
+                             total_network_usage=total_network_usage,
+                             hourly_data=hourly_data,
+                             top_devices=top_devices)
     except Exception as e:
         logging.error(f"Error accessing network usage page: {str(e)}")
         return jsonify({'error': 'Internal server error'}), 500
@@ -245,21 +257,42 @@ def get_network_usage():
     try:
         current_user = get_jwt_identity()
         logging.info(f"User {current_user} fetching network usage data")
-        token = get_jwt()
-        logging.info(f"Token present: {bool(token)}")
         
         end_time = datetime.utcnow()
         start_time = end_time - timedelta(days=1)
+        
+        # Get hourly usage data
         hourly_usage = db.session.query(
             func.date_trunc('hour', NetworkUsage.timestamp).label('hour'),
             func.sum(NetworkUsage.data_used).label('usage')
         ).filter(NetworkUsage.timestamp.between(start_time, end_time)
         ).group_by('hour').order_by('hour').all()
         
+        # Convert bytes to MB for better readability
         labels = [entry.hour.strftime('%Y-%m-%d %H:%M') for entry in hourly_usage]
-        values = [float(entry.usage) / (1024 * 1024) for entry in hourly_usage]  # Convert to MB
+        values = [float(entry.usage or 0) / (1024 * 1024) for entry in hourly_usage]
         
-        return jsonify({'labels': labels, 'values': values})
+        # Get device-specific usage data
+        devices = Device.query.all()
+        device_usage = []
+        for device in devices:
+            device_data = db.session.query(
+                func.sum(NetworkUsage.data_used).label('total_usage')
+            ).filter(
+                NetworkUsage.device_id == device.id,
+                NetworkUsage.timestamp.between(start_time, end_time)
+            ).first()
+            
+            device_usage.append({
+                'name': device.name,
+                'usage': float(device_data.total_usage or 0) / (1024 * 1024)  # Convert to MB
+            })
+        
+        return jsonify({
+            'labels': labels,
+            'values': values,
+            'devices': sorted(device_usage, key=lambda x: x['usage'], reverse=True)
+        })
     except Exception as e:
         logging.error(f"Error fetching network usage data: {str(e)}")
         return jsonify({'error': 'Internal server error'}), 500
@@ -268,58 +301,14 @@ def get_network_usage():
 def handle_connect():
     logging.info("WebSocket connection attempt")
     try:
-        token = request.args.get('token') or request.headers.get('Authorization')
-        if not token:
-            auth_data = request.args.get('auth')
-            if isinstance(auth_data, dict):
-                token = auth_data.get('token')
-        if not token:
-            token = request.cookies.get('access_token_cookie')
-
-        if not token:
-            logging.error('No token provided for WebSocket connection')
-            return False
-
-        try:
-            jwt.decode_token(token)
-            logging.info(f'User connected via WebSocket')
-        except Exception as e:
-            logging.error(f'Invalid token for WebSocket connection: {str(e)}')
-            return False
+        verify_jwt_in_request()
+        current_user = get_jwt_identity()
+        logging.info(f'User {current_user} connected via WebSocket')
+        return True
     except Exception as e:
         logging.error(f'Error during WebSocket connection: {str(e)}')
         return False
 
-    return True
-
 @socketio.on('disconnect')
 def handle_disconnect():
     logging.info('Client disconnected from WebSocket')
-
-@socketio.on('toggle_device')
-@jwt_required()
-def handle_toggle_device(data):
-    try:
-        current_user = get_jwt_identity()
-        device_id = data.get('device_id')
-        logging.info(f"User {current_user} toggling device {device_id} via WebSocket")
-        device = Device.query.get_or_404(device_id)
-        device.blocked = not device.blocked
-        db.session.commit()
-        
-        device_data = {
-            'id': device.id,
-            'name': device.name,
-            'ip_address': device.ip_address,
-            'mac_address': device.mac_address,
-            'status': device.status,
-            'blocked': device.blocked,
-            'last_seen': device.last_seen.isoformat() if device.last_seen else None,
-            'data_usage': device.data_usage
-        }
-        
-        emit('device_updated', device_data, broadcast=True)
-        logging.info(f'Device {device_id} toggled. New blocked status: {device.blocked}')
-    except Exception as e:
-        logging.error(f'Error handling toggle_device: {str(e)}')
-        emit('error', {'message': 'Unauthorized or invalid request'})

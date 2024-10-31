@@ -33,11 +33,11 @@ def create_app():
     app.config["JWT_TOKEN_LOCATION"] = ["cookies"]
     app.config["JWT_ACCESS_COOKIE_PATH"] = "/"
     app.config["JWT_REFRESH_COOKIE_PATH"] = "/refresh"
-    app.config["JWT_COOKIE_SECURE"] = False  # Set to True in production with HTTPS
-    app.config["JWT_COOKIE_CSRF_PROTECT"] = False  # Set to True and implement CSRF protection in production
-    app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(minutes=30)  # Increase expiration time for testing
+    app.config["JWT_COOKIE_CSRF_PROTECT"] = False
+    app.config["JWT_COOKIE_SECURE"] = False  # Set to True in production
+    app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=1)
     app.config['JWT_REFRESH_TOKEN_EXPIRES'] = timedelta(days=30)
-    app.config['JWT_COOKIE_SAMESITE'] = 'Lax'  # Allow cookies to be sent with top-level navigation
+    app.config['JWT_COOKIE_SAMESITE'] = 'Lax'
 
     # Initialize extensions
     db.init_app(app)
@@ -62,11 +62,6 @@ def create_app():
     # Print URL map for debugging
     print("URL Map:")
     print(app.url_map)
-
-    # Add a test route
-    @app.route('/test')
-    def test_route():
-        return 'Test Route Working'
 
     @socketio.on_error_default
     def default_error_handler(e):

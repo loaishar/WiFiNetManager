@@ -53,8 +53,11 @@ def create_app():
     logging.getLogger('engineio').setLevel(logging.DEBUG)
 
     with app.app_context():
-        from models import User, Device, NetworkUsage
         db.create_all()
+        
+        # Start network monitoring
+        from network_scanner import start_total_usage_monitoring
+        start_total_usage_monitoring()
 
     # Register the Blueprint
     app.register_blueprint(main_blueprint)

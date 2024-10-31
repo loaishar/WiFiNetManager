@@ -65,42 +65,6 @@ if __name__ == "__main__":
 
 --------------------------------------------------
 
-File: ./network_scanner.py
---------------------------------------------------
-Contents of ./network_scanner.py:
-import random
-from datetime import datetime, timedelta
-
-def generate_mac_address():
-    """Generate a random MAC address."""
-    return ':'.join(['{:02x}'.format(random.randint(0x00, 0xff)) for _ in range(6)])
-
-def generate_ip_address():
-    """Generate a random IP address within a private IP range."""
-    return f"192.168.1.{random.randint(2, 254)}"
-
-def generate_device_name():
-    """Generate a random device name."""
-    device_types = ['Laptop', 'Smartphone', 'Tablet', 'Smart TV', 'Printer', 'Camera']
-    return f"{random.choice(device_types)}-{random.randint(1000, 9999)}"
-
-def scan_network():
-    """Simulate network scanning by generating a list of devices."""
-    devices = []
-    for _ in range(random.randint(5, 15)):
-        device = {
-            'name': generate_device_name(),
-            'ip_address': generate_ip_address(),
-            'mac_address': generate_mac_address(),
-            'status': random.choice([True, False]),
-            'blocked': False,
-            'last_seen': datetime.utcnow() - timedelta(minutes=random.randint(0, 60))
-        }
-        devices.append(device)
-    return devices
-
---------------------------------------------------
-
 File: ./extensions.py
 --------------------------------------------------
 Contents of ./extensions.py:
@@ -207,11 +171,6 @@ def create_app():
 
 --------------------------------------------------
 
-File: ./image.png
---------------------------------------------------
-Could not read file: ./image.png. Error: 'utf-8' codec can't decode byte 0x89 in position 0: invalid start byte
---------------------------------------------------
-
 File: ./models.py
 --------------------------------------------------
 Contents of ./models.py:
@@ -285,10 +244,28 @@ class NetworkSettings(db.Model):
 
 --------------------------------------------------
 
+File: ./list_users.py
+--------------------------------------------------
+Contents of ./list_users.py:
+from app import create_app
+from extensions import db
+from models import User
+
+app = create_app()
+
+with app.app_context():
+    users = User.query.all()
+    for user in users:
+        print(
+            f"ID: {user.id}, Username: {user.username}, Email: {user.email}, Is Admin: {user.is_admin}"
+        )
+
+--------------------------------------------------
+
 File: ./routes.py
 --------------------------------------------------
 Contents of ./routes.py:
-from flask import Blueprint, render_template, request, jsonify, redirect, url_for, flash, make_response, current_app
+from flask import Blueprint, render_template, request, jsonify, redirect, url_for, flash, make_response, current_app, g
 from flask_jwt_extended import (
     create_access_token, create_refresh_token, jwt_required, get_jwt_identity,
     set_access_cookies, set_refresh_cookies, unset_jwt_cookies, get_jwt,
@@ -324,6 +301,36 @@ def admin_required(fn):
             return redirect(url_for('main.login'))
     return wrapper
 
+@main.before_request
+def load_logged_in_user():
+    try:
+        verify_jwt_in_request(optional=True)
+        claims = get_jwt()
+        if claims:
+            g.user = {
+                'id': get_jwt_identity(),
+                'is_admin': claims.get('is_admin', False)
+            }
+        else:
+            g.user = None
+    except Exception:
+        g.user = None
+
+@main.route('/api/check_first_user')
+def check_first_user():
+    try:
+        first_user = User.query.order_by(User.id.asc()).first()
+        if first_user:
+            return jsonify({
+                'username': first_user.username,
+                'is_admin': first_user.is_admin,
+                'message': f'The first registered user (admin) is: {first_user.username}'
+            })
+        return jsonify({'error': 'No users found in the database'}), 404
+    except Exception as e:
+        logging.error(f"Error checking first user: {str(e)}")
+        return jsonify({'error': 'Internal server error'}), 500
+
 @main.route('/')
 def index():
     logging.info("Accessing index route")
@@ -337,7 +344,6 @@ def register():
         password = request.form['password']
 
         try:
-            # Make the first user an admin
             is_admin = User.query.count() == 0
             user = User(username=username, email=email, is_admin=is_admin)
             user.set_password(password)
@@ -384,7 +390,11 @@ def login():
 def refresh():
     try:
         current_user = get_jwt_identity()
-        access_token = create_access_token(identity=current_user)
+        user = User.query.get(current_user)
+        access_token = create_access_token(
+            identity=current_user,
+            additional_claims={'is_admin': user.is_admin}
+        )
         
         response = jsonify({'msg': 'Token refreshed successfully'})
         set_access_cookies(response, access_token)
@@ -733,6 +743,139 @@ def update_device(device_id):
         logging.error(f"Error updating device: {str(e)}")
         db.session.rollback()
         return jsonify({'error': 'Internal server error'}), 500
+--------------------------------------------------
+
+File: ./network_scanner.py
+--------------------------------------------------
+Contents of ./network_scanner.py:
+import psutil
+import netifaces
+import scapy.all as scapy
+import logging
+from datetime import datetime, timedelta
+import socket
+import threading
+import time
+
+def get_network_interfaces():
+    """Get all active network interfaces."""
+    interfaces = []
+    for iface in netifaces.interfaces():
+        addrs = netifaces.ifaddresses(iface)
+        if netifaces.AF_INET in addrs:  # Has IPv4
+            interfaces.append(iface)
+    return interfaces
+
+def get_ip_network():
+    """Get the current network's IP range."""
+    for iface in get_network_interfaces():
+        addrs = netifaces.ifaddresses(iface)
+        if netifaces.AF_INET in addrs:
+            for addr in addrs[netifaces.AF_INET]:
+                ip = addr['addr']
+                if not ip.startswith('127.'):  # Skip localhost
+                    netmask = addr['netmask']
+                    return f"{ip}/{netmask}"
+    return "192.168.1.0/24"  # Fallback
+
+def arp_scan(ip_range):
+    """Perform ARP scan to discover devices."""
+    try:
+        # Create ARP request packet
+        arp_request = scapy.ARP(pdst=ip_range)
+        broadcast = scapy.Ether(dst="ff:ff:ff:ff:ff:ff")
+        arp_request_broadcast = broadcast/arp_request
+        
+        # Send packet and get responses
+        answered_list = scapy.srp(arp_request_broadcast, timeout=3, verbose=False)[0]
+        
+        devices = []
+        for element in answered_list:
+            device = {
+                'ip_address': element[1].psrc,
+                'mac_address': element[1].hwsrc,
+                'name': get_device_name(element[1].psrc),
+                'status': True,
+                'blocked': False,
+                'last_seen': datetime.utcnow()
+            }
+            devices.append(device)
+        return devices
+    except Exception as e:
+        logging.error(f"Error during ARP scan: {str(e)}")
+        return []
+
+def get_device_name(ip):
+    """Try to get device hostname."""
+    try:
+        return socket.gethostbyaddr(ip)[0]
+    except:
+        return f"Device-{ip.split('.')[-1]}"
+
+def get_network_usage(interface):
+    """Get network usage statistics for an interface."""
+    try:
+        io_counters = psutil.net_io_counters(pernic=True)
+        if interface in io_counters:
+            stats = io_counters[interface]
+            return {
+                'bytes_sent': stats.bytes_sent,
+                'bytes_recv': stats.bytes_recv,
+                'packets_sent': stats.packets_sent,
+                'packets_recv': stats.packets_recv
+            }
+    except Exception as e:
+        logging.error(f"Error getting network usage: {str(e)}")
+    return None
+
+def monitor_bandwidth(device_ip, duration=5):
+    """Monitor bandwidth usage for a specific device."""
+    try:
+        initial = psutil.net_io_counters()
+        time.sleep(duration)
+        final = psutil.net_io_counters()
+        
+        bytes_sent = final.bytes_sent - initial.bytes_sent
+        bytes_recv = final.bytes_recv - initial.bytes_recv
+        
+        return {
+            'upload': bytes_sent / duration,  # bytes per second
+            'download': bytes_recv / duration  # bytes per second
+        }
+    except Exception as e:
+        logging.error(f"Error monitoring bandwidth: {str(e)}")
+        return {'upload': 0, 'download': 0}
+
+def scan_network():
+    """Scan network and return list of devices with real data."""
+    logging.info("Starting network scan")
+    ip_range = get_ip_network()
+    devices = arp_scan(ip_range)
+    
+    # Get bandwidth info for each device
+    for device in devices:
+        bandwidth = monitor_bandwidth(device['ip_address'])
+        device['data_usage'] = bandwidth['upload'] + bandwidth['download']
+    
+    logging.info(f"Found {len(devices)} devices")
+    return devices
+
+# Start background monitoring thread
+def start_monitoring():
+    def monitor():
+        while True:
+            try:
+                interfaces = get_network_interfaces()
+                for interface in interfaces:
+                    usage = get_network_usage(interface)
+                    if usage:
+                        logging.info(f"Interface {interface} usage: {usage}")
+            except Exception as e:
+                logging.error(f"Monitoring error: {str(e)}")
+            time.sleep(60)  # Update every minute
+
+    monitor_thread = threading.Thread(target=monitor, daemon=True)
+    monitor_thread.start()
 
 --------------------------------------------------
 
@@ -806,150 +949,6 @@ body {
     background-color: var(--bs-gray-600);
     color: var(--bs-light);
 }
-
---------------------------------------------------
-
-File: ./static/js/admin.js
---------------------------------------------------
-Contents of ./static/js/admin.js:
-// Admin Dashboard JavaScript
-
-document.addEventListener('DOMContentLoaded', function() {
-    // Initialize tooltips
-    var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'))
-    var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
-        return new bootstrap.Tooltip(tooltipTriggerEl)
-    });
-
-    // Network Settings
-    const saveSettingBtn = document.getElementById('saveSettingBtn');
-    if (saveSettingBtn) {
-        saveSettingBtn.addEventListener('click', function() {
-            const name = document.getElementById('settingName').value;
-            const value = document.getElementById('settingValue').value;
-            const description = document.getElementById('settingDescription').value;
-
-            fetchWithAuth('/api/admin/settings', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ name, value, description })
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    location.reload();
-                } else {
-                    alert('Error saving setting');
-                }
-            })
-            .catch(error => {
-                console.error('Error:', error);
-                alert('Error saving setting');
-            });
-        });
-    }
-
-    // Delete Setting
-    document.querySelectorAll('.delete-setting').forEach(button => {
-        button.addEventListener('click', function() {
-            const settingId = this.dataset.settingId;
-            if (confirm('Are you sure you want to delete this setting?')) {
-                fetchWithAuth(`/api/admin/settings/${settingId}`, {
-                    method: 'DELETE'
-                })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.success) {
-                        location.reload();
-                    } else {
-                        alert('Error deleting setting');
-                    }
-                })
-                .catch(error => {
-                    console.error('Error:', error);
-                    alert('Error deleting setting');
-                });
-            }
-        });
-    });
-
-    // Edit Device
-    document.querySelectorAll('.edit-device').forEach(button => {
-        button.addEventListener('click', function() {
-            const deviceId = this.dataset.deviceId;
-            const row = this.closest('tr');
-            
-            document.getElementById('deviceId').value = deviceId;
-            document.getElementById('deviceName').value = row.cells[0].textContent;
-            document.getElementById('bandwidthLimit').value = row.cells[5].textContent.trim() === 'Unlimited' 
-                ? 0 
-                : parseInt(row.cells[5].textContent);
-            document.getElementById('deviceNotes').value = row.cells[6].textContent;
-        });
-    });
-
-    // Save Device Changes
-    const saveDeviceBtn = document.getElementById('saveDeviceBtn');
-    if (saveDeviceBtn) {
-        saveDeviceBtn.addEventListener('click', function() {
-            const deviceId = document.getElementById('deviceId').value;
-            const name = document.getElementById('deviceName').value;
-            const bandwidthLimit = parseInt(document.getElementById('bandwidthLimit').value);
-            const notes = document.getElementById('deviceNotes').value;
-
-            fetchWithAuth(`/api/admin/devices/${deviceId}`, {
-                method: 'PUT',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ 
-                    name, 
-                    bandwidth_limit: bandwidthLimit,
-                    notes 
-                })
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    location.reload();
-                } else {
-                    alert('Error updating device');
-                }
-            })
-            .catch(error => {
-                console.error('Error:', error);
-                alert('Error updating device');
-            });
-        });
-    }
-
-    // Initialize Socket.IO for real-time updates
-    const socket = io();
-    
-    socket.on('device_updated', function(device) {
-        const row = document.querySelector(`tr[data-device-id="${device.id}"]`);
-        if (row) {
-            updateDeviceRow(row, device);
-        }
-    });
-
-    function updateDeviceRow(row, device) {
-        row.cells[0].textContent = device.name;
-        row.cells[4].textContent = `${(device.data_usage / (1024 * 1024)).toFixed(2)} MB`;
-        row.cells[5].textContent = device.bandwidth_limit === 0 ? 'Unlimited' : `${device.bandwidth_limit} Mbps`;
-        row.cells[6].textContent = device.notes || '';
-        
-        const statusBadge = row.cells[3].querySelector('.badge');
-        statusBadge.className = `badge bg-${device.status ? 'success' : 'danger'}`;
-        statusBadge.textContent = device.status ? 'Online' : 'Offline';
-        
-        const toggleButton = row.querySelector('.toggle-device');
-        toggleButton.className = `btn btn-sm btn-${device.blocked ? 'success' : 'danger'} toggle-device`;
-        toggleButton.textContent = device.blocked ? 'Unblock' : 'Block';
-    }
-});
 
 --------------------------------------------------
 
@@ -1481,6 +1480,165 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 --------------------------------------------------
 
+File: ./static/js/admin.js
+--------------------------------------------------
+Contents of ./static/js/admin.js:
+// Admin Dashboard JavaScript
+
+document.addEventListener('DOMContentLoaded', function() {
+    // Check first user info
+    fetch('/api/check_first_user')
+        .then(response => response.json())
+        .then(data => {
+            if (data.message) {
+                const alert = document.createElement('div');
+                alert.className = 'alert alert-info alert-dismissible fade show';
+                alert.innerHTML = `
+                    ${data.message}
+                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                `;
+                document.querySelector('.container-fluid').insertBefore(alert, document.querySelector('.container-fluid').firstChild);
+            }
+        })
+        .catch(error => console.error('Error fetching first user:', error));
+
+    // Initialize tooltips
+    var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'))
+    var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
+        return new bootstrap.Tooltip(tooltipTriggerEl)
+    });
+
+    // Network Settings
+    const saveSettingBtn = document.getElementById('saveSettingBtn');
+    if (saveSettingBtn) {
+        saveSettingBtn.addEventListener('click', function() {
+            const name = document.getElementById('settingName').value;
+            const value = document.getElementById('settingValue').value;
+            const description = document.getElementById('settingDescription').value;
+
+            fetchWithAuth('/api/admin/settings', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ name, value, description })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    location.reload();
+                } else {
+                    alert('Error saving setting');
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Error saving setting');
+            });
+        });
+    }
+
+    // Delete Setting
+    document.querySelectorAll('.delete-setting').forEach(button => {
+        button.addEventListener('click', function() {
+            const settingId = this.dataset.settingId;
+            if (confirm('Are you sure you want to delete this setting?')) {
+                fetchWithAuth(`/api/admin/settings/${settingId}`, {
+                    method: 'DELETE'
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        location.reload();
+                    } else {
+                        alert('Error deleting setting');
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    alert('Error deleting setting');
+                });
+            }
+        });
+    });
+
+    // Edit Device
+    document.querySelectorAll('.edit-device').forEach(button => {
+        button.addEventListener('click', function() {
+            const deviceId = this.dataset.deviceId;
+            const row = this.closest('tr');
+            
+            document.getElementById('deviceId').value = deviceId;
+            document.getElementById('deviceName').value = row.cells[0].textContent;
+            document.getElementById('bandwidthLimit').value = row.cells[5].textContent.trim() === 'Unlimited' 
+                ? 0 
+                : parseInt(row.cells[5].textContent);
+            document.getElementById('deviceNotes').value = row.cells[6].textContent;
+        });
+    });
+
+    // Save Device Changes
+    const saveDeviceBtn = document.getElementById('saveDeviceBtn');
+    if (saveDeviceBtn) {
+        saveDeviceBtn.addEventListener('click', function() {
+            const deviceId = document.getElementById('deviceId').value;
+            const name = document.getElementById('deviceName').value;
+            const bandwidthLimit = parseInt(document.getElementById('bandwidthLimit').value);
+            const notes = document.getElementById('deviceNotes').value;
+
+            fetchWithAuth(`/api/admin/devices/${deviceId}`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ 
+                    name, 
+                    bandwidth_limit: bandwidthLimit,
+                    notes 
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    location.reload();
+                } else {
+                    alert('Error updating device');
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Error updating device');
+            });
+        });
+    }
+
+    // Initialize Socket.IO for real-time updates
+    const socket = io();
+    
+    socket.on('device_updated', function(device) {
+        const row = document.querySelector(`tr[data-device-id="${device.id}"]`);
+        if (row) {
+            updateDeviceRow(row, device);
+        }
+    });
+
+    function updateDeviceRow(row, device) {
+        row.cells[0].textContent = device.name;
+        row.cells[4].textContent = `${(device.data_usage / (1024 * 1024)).toFixed(2)} MB`;
+        row.cells[5].textContent = device.bandwidth_limit === 0 ? 'Unlimited' : `${device.bandwidth_limit} Mbps`;
+        row.cells[6].textContent = device.notes || '';
+        
+        const statusBadge = row.cells[3].querySelector('.badge');
+        statusBadge.className = `badge bg-${device.status ? 'success' : 'danger'}`;
+        statusBadge.textContent = device.status ? 'Online' : 'Offline';
+        
+        const toggleButton = row.querySelector('.toggle-device');
+        toggleButton.className = `btn btn-sm btn-${device.blocked ? 'success' : 'danger'} toggle-device`;
+        toggleButton.textContent = device.blocked ? 'Unblock' : 'Block';
+    }
+});
+--------------------------------------------------
+
 Directory: ./templates/
 --------------------------------------------------
 File: ./templates/devices.html
@@ -1779,13 +1937,14 @@ Contents of ./templates/base.html:
                     <li class="nav-item">
                         <a class="nav-link" href="{{ url_for('main.index') }}">Home</a>
                     </li>
+                    {% if g.user %}
                     <li class="nav-item">
                         <a class="nav-link" href="{{ url_for('main.devices') }}">Devices</a>
                     </li>
                     <li class="nav-item">
                         <a class="nav-link" href="{{ url_for('main.network_usage') }}">Network Usage</a>
                     </li>
-                    {% if current_user and current_user.is_admin %}
+                    {% if g.user and g.user.is_admin %}
                     <li class="nav-item">
                         <a class="nav-link" href="{{ url_for('main.admin_dashboard') }}">Admin Dashboard</a>
                     </li>
@@ -1793,6 +1952,14 @@ Contents of ./templates/base.html:
                     <li class="nav-item">
                         <a class="nav-link" href="{{ url_for('main.logout') }}">Logout</a>
                     </li>
+                    {% else %}
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('main.login') }}">Login</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('main.register') }}">Register</a>
+                    </li>
+                    {% endif %}
                 </ul>
             </div>
         </div>

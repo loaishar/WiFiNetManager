@@ -57,6 +57,13 @@ class NetworkUsage(db.Model):
 
     device = db.relationship('Device', backref=db.backref('usage_history', lazy='dynamic'))
 
+class TotalNetworkUsage(db.Model):
+    __tablename__ = 'total_network_usage'
+    id = db.Column(db.Integer, primary_key=True)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+    bytes_sent = db.Column(db.BigInteger)
+    bytes_recv = db.Column(db.BigInteger)
+
 class NetworkSettings(db.Model):
     __tablename__ = 'network_settings'
     id = db.Column(db.Integer, primary_key=True)

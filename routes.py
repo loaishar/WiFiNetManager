@@ -351,14 +351,24 @@ def simulate_network_usage_updates():
             with app.app_context():
                 devices = Device.query.all()
                 for device in devices:
-                    usage = random.randint(1000000, 10000000)
-                    device.update_data_usage(usage)
-                db.session.commit()
+                    try:
+                        usage = random.randint(1000000, 10000000)
+                        device.update_data_usage(usage)
+                        db.session.commit()
+                    except Exception as e:
+                        logging.error(f"Error updating device {device.id}: {str(e)}")
+                        db.session.rollback()
+                        continue
 
                 response = get_network_usage()
-                socketio.emit('network_usage_update', response.json, broadcast=True)
+                if hasattr(response, 'json'):
+                    socketio.emit('network_usage_update', response.json, broadcast=True)
+                else:
+                    logging.error("Invalid response from get_network_usage()")
         except Exception as e:
             logging.error(f"Error in network usage simulation: {str(e)}")
+        finally:
+            db.session.close()
         eventlet.sleep(60)
 
 @socketio.on('connect')

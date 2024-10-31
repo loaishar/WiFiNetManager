@@ -28,6 +28,8 @@ class Device(db.Model):
     last_usage_update = db.Column(db.DateTime, default=datetime.utcnow)
 
     def update_data_usage(self, bytes_used):
+        if self.data_usage is None:
+            self.data_usage = 0
         self.data_usage += bytes_used
         self.last_usage_update = datetime.utcnow()
         new_usage = NetworkUsage(device_id=self.id, data_used=bytes_used)

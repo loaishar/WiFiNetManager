@@ -148,6 +148,9 @@ function loadNetworkUsageData(timeRange = '24h') {
             if (data.error) {
                 throw new Error(data.error);
             }
+            if (!data.devices || !data.labels || !data.values) {
+                throw new Error('Invalid data format received');
+            }
             renderNetworkUsageChart(data);
             renderDeviceDistributionChart(data.devices);
             updateNetworkStats(data);

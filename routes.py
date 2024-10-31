@@ -1,4 +1,4 @@
-from flask import Blueprint, render_template, request, jsonify, redirect, url_for, flash, make_response
+from flask import Blueprint, render_template, request, jsonify, redirect, url_for, flash, make_response, current_app
 from flask_jwt_extended import (
     create_access_token, create_refresh_token, jwt_required, get_jwt_identity,
     set_access_cookies, set_refresh_cookies, unset_jwt_cookies, get_jwt,
@@ -80,13 +80,12 @@ def login():
 def refresh():
     try:
         current_user = get_jwt_identity()
-        new_access_token = create_access_token(identity=current_user)
+        access_token = create_access_token(identity=current_user)
         
-        resp = jsonify({'access_token': new_access_token})
-        set_access_cookies(resp, new_access_token)
+        response = jsonify({'msg': 'Token refreshed successfully'})
+        set_access_cookies(response, access_token)
         
-        logging.info(f"Token refreshed for user {current_user}")
-        return resp, 200
+        return response
     except Exception as e:
         logging.error(f"Error refreshing token: {str(e)}")
         return jsonify({"msg": "Token refresh failed"}), 401
@@ -344,17 +343,18 @@ def handle_disconnect():
     logging.info('Client disconnected from WebSocket')
 
 def simulate_network_usage_updates():
+    app = current_app._get_current_object()  # Get the current app instance
     while True:
         try:
-            devices = Device.query.all()
-            for device in devices:
-                usage = random.randint(1000000, 10000000)
-                device.update_data_usage(usage)
-            db.session.commit()
-
             with app.app_context():
+                devices = Device.query.all()
+                for device in devices:
+                    usage = random.randint(1000000, 10000000)
+                    device.update_data_usage(usage)
+                db.session.commit()
+
                 response = get_network_usage()
-                emit('network_usage_update', response.json, broadcast=True)
+                socketio.emit('network_usage_update', response.json, broadcast=True)
 
         except Exception as e:
             logging.error(f"Error in network usage simulation: {str(e)}")

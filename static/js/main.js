@@ -15,17 +15,27 @@ function fetchWithAuth(url, options = {}) {
         .then(response => {
             console.log('Response status:', response.status);
             if (response.status === 401) {
-                window.location.href = '/login';
-                throw new Error('Unauthorized');
+                return fetch('/refresh', { 
+                    method: 'POST',
+                    credentials: 'include'
+                })
+                .then(refreshResponse => {
+                    if (!refreshResponse.ok) {
+                        window.location.href = '/login';
+                        throw new Error('Token refresh failed');
+                    }
+                    return fetch(url, options);
+                })
+                .catch(error => {
+                    console.error('Token refresh failed:', error);
+                    window.location.href = '/login';
+                    throw error;
+                });
             }
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
             }
             return response;
-        })
-        .catch(error => {
-            console.error('Error during fetch:', error);
-            throw error;
         });
 }
 
@@ -40,7 +50,8 @@ function initializeSocket() {
             token: getCookie('access_token_cookie')
         },
         reconnection: true,
-        reconnectionAttempts: 5
+        reconnectionAttempts: 5,
+        reconnectionDelay: 1000
     });
 
     socket.on('connect', function() {
@@ -51,10 +62,22 @@ function initializeSocket() {
         console.log('Disconnected from WebSocket server:', reason);
     });
 
-    socket.on('connect_error', function(error) {
-        console.error('Connection error:', error.message);
-        if (error.message === 'Unauthorized') {
-            window.location.href = '/login';
+    socket.on('connect_error', (error) => {
+        console.error('Socket connection error:', error);
+        if (error.message === 'jwt expired') {
+            fetch('/refresh', { 
+                method: 'POST',
+                credentials: 'include'
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Token refresh failed');
+                }
+                socket.connect();
+            })
+            .catch(() => {
+                window.location.href = '/login';
+            });
         }
     });
 

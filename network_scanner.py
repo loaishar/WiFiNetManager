@@ -8,7 +8,6 @@ import socket
 import threading
 import time
 import os
-from flask import current_app
 
 def get_network_interfaces():
     """Get all active network interfaces."""
@@ -127,9 +126,11 @@ def start_total_usage_monitoring():
     """Start background thread to monitor total network usage."""
     def monitor():
         logging.info("Starting network usage monitoring")
+        from app import create_app
+        app = create_app()
+        
         while True:
             try:
-                app = current_app._get_current_object()
                 with app.app_context():
                     from extensions import db
                     from models import TotalNetworkUsage, Device

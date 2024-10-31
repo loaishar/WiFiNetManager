@@ -10,6 +10,9 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
-    "chart.js": "^4.4.6"
+    "chart.js": "^4.4.6",
+    "chartjs-adapter-date-fns": "^3.0.0",
+    "chartjs-plugin-zoom": "^2.0.1",
+    "date-fns": "^4.1.0"
   }
 }

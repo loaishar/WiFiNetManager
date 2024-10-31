@@ -1,4 +1,6 @@
 let socket;
+let networkUsageChart = null;
+let deviceDistributionChart = null;
 
 function getCookie(name) {
     const value = `; ${document.cookie}`;
@@ -64,6 +66,11 @@ function initializeSocket() {
     socket.on('devices_update', function(devices) {
         console.log('Devices update received:', devices);
         refreshDeviceList(devices);
+    });
+
+    socket.on('network_usage_update', function(data) {
+        console.log('Network usage update received:', data);
+        updateNetworkUsageData(data);
     });
 }
 
@@ -151,39 +158,58 @@ function refreshDeviceList(devices) {
     }
 }
 
-function loadNetworkUsageData() {
-    const ctx = document.getElementById('networkUsageChart');
-    if (ctx) {
-        fetchWithAuth('/api/network_usage')
-            .then(response => response.json())
-            .then(data => {
-                renderNetworkUsageChart(ctx, data);
-                updateNetworkUsageStats(data);
-            })
-            .catch(error => {
-                console.error('Error fetching network usage data:', error);
-            });
-    }
+function loadNetworkUsageData(timeRange = '24h') {
+    fetchWithAuth(`/api/network_usage?range=${timeRange}`)
+        .then(response => response.json())
+        .then(data => {
+            renderNetworkUsageChart(data);
+            renderDeviceDistributionChart(data.devices);
+            updateNetworkStats(data);
+        })
+        .catch(error => {
+            console.error('Error fetching network usage data:', error);
+        });
 }
 
-function renderNetworkUsageChart(ctx, data) {
-    new Chart(ctx, {
+function renderNetworkUsageChart(data) {
+    const ctx = document.getElementById('networkUsageChart');
+    if (!ctx) return;
+
+    const chartData = {
+        labels: data.labels,
+        datasets: [{
+            label: 'Network Usage (MB)',
+            data: data.values,
+            borderColor: 'rgb(75, 192, 192)',
+            backgroundColor: 'rgba(75, 192, 192, 0.2)',
+            tension: 0.1,
+            fill: true
+        }]
+    };
+
+    if (networkUsageChart) {
+        networkUsageChart.destroy();
+    }
+
+    networkUsageChart = new Chart(ctx, {
         type: 'line',
-        data: {
-            labels: data.labels,
-            datasets: [{
-                label: 'Network Usage (MB)',
-                data: data.values,
-                borderColor: 'rgb(75, 192, 192)',
-                backgroundColor: 'rgba(75, 192, 192, 0.2)',
-                tension: 0.1,
-                fill: true
-            }]
-        },
+        data: chartData,
         options: {
             responsive: true,
+            maintainAspectRatio: false,
+            interaction: {
+                intersect: false,
+                mode: 'index'
+            },
             scales: {
                 x: {
+                    type: 'time',
+                    time: {
+                        unit: 'hour',
+                        displayFormats: {
+                            hour: 'MMM d, HH:mm'
+                        }
+                    },
                     title: {
                         display: true,
                         text: 'Time'
@@ -198,17 +224,77 @@ function renderNetworkUsageChart(ctx, data) {
                 }
             },
             plugins: {
+                zoom: {
+                    zoom: {
+                        wheel: {
+                            enabled: true
+                        },
+                        pinch: {
+                            enabled: true
+                        },
+                        mode: 'xy'
+                    },
+                    pan: {
+                        enabled: true,
+                        mode: 'xy'
+                    }
+                },
                 tooltip: {
                     callbacks: {
                         label: function(context) {
-                            let label = context.dataset.label || '';
-                            if (label) {
-                                label += ': ';
-                            }
-                            if (context.parsed.y !== null) {
-                                label += context.parsed.y.toFixed(2) + ' MB';
-                            }
-                            return label;
+                            return `Usage: ${context.parsed.y.toFixed(2)} MB`;
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    document.getElementById('resetZoom')?.addEventListener('click', function() {
+        networkUsageChart.resetZoom();
+    });
+}
+
+function renderDeviceDistributionChart(devices) {
+    const ctx = document.getElementById('deviceDistributionChart');
+    if (!ctx) return;
+
+    const deviceData = devices.map(device => ({
+        name: device.name,
+        usage: device.usage
+    }));
+
+    const data = {
+        labels: deviceData.map(d => d.name),
+        datasets: [{
+            data: deviceData.map(d => d.usage),
+            backgroundColor: [
+                'rgba(255, 99, 132, 0.8)',
+                'rgba(54, 162, 235, 0.8)',
+                'rgba(255, 206, 86, 0.8)',
+                'rgba(75, 192, 192, 0.8)',
+                'rgba(153, 102, 255, 0.8)'
+            ]
+        }]
+    };
+
+    if (deviceDistributionChart) {
+        deviceDistributionChart.destroy();
+    }
+
+    deviceDistributionChart = new Chart(ctx, {
+        type: 'pie',
+        data: data,
+        options: {
+            responsive: true,
+            plugins: {
+                legend: {
+                    position: 'bottom'
+                },
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            return `${context.label}: ${context.parsed.toFixed(2)} MB`;
                         }
                     }
                 }
@@ -217,24 +303,100 @@ function renderNetworkUsageChart(ctx, data) {
     });
 }
 
-function updateNetworkUsageStats(data) {
-    const totalUsage = data.values.reduce((a, b) => a + b, 0).toFixed(2);
-    const averageUsage = (totalUsage / data.values.length).toFixed(2);
-    const maxUsage = Math.max(...data.values).toFixed(2);
+function updateNetworkStats(data) {
+    const stats = data.statistics;
+    if (!stats) return;
 
-    const statsContainer = document.getElementById('networkUsageStats');
-    if (statsContainer) {
-        statsContainer.innerHTML = `
-            <div class="card mb-3">
-                <div class="card-body">
-                    <h5 class="card-title">Network Usage Statistics</h5>
-                    <p class="card-text">Total Usage: ${totalUsage} MB</p>
-                    <p class="card-text">Average Hourly Usage: ${averageUsage} MB</p>
-                    <p class="card-text">Peak Usage: ${maxUsage} MB</p>
-                </div>
-            </div>
-        `;
+    document.getElementById('totalUsage').textContent = `${stats.total_usage.toFixed(2)} MB`;
+    document.getElementById('peakUsageTime').textContent = stats.peak_usage_time;
+    
+    const trendElement = document.getElementById('usageTrend');
+    if (stats.trend > 0) {
+        trendElement.innerHTML = '<span class="text-success">↑ Increasing</span>';
+    } else if (stats.trend < 0) {
+        trendElement.innerHTML = '<span class="text-danger">↓ Decreasing</span>';
+    } else {
+        trendElement.innerHTML = '<span class="text-warning">→ Stable</span>';
     }
+
+    document.getElementById('periodComparison').textContent = 
+        `${stats.period_comparison > 0 ? '+' : ''}${stats.period_comparison}% vs previous`;
+}
+
+function updateNetworkUsageData(data) {
+    if (networkUsageChart) {
+        networkUsageChart.data.labels = data.labels;
+        networkUsageChart.data.datasets[0].data = data.values;
+        networkUsageChart.update('none');
+    }
+
+    if (deviceDistributionChart) {
+        renderDeviceDistributionChart(data.devices);
+    }
+
+    updateNetworkStats(data);
+}
+
+function initializeTimeRangeButtons() {
+    const buttons = document.querySelectorAll('.time-range-btn');
+    buttons.forEach(button => {
+        button.addEventListener('click', function() {
+            buttons.forEach(btn => btn.classList.remove('active'));
+            this.classList.add('active');
+            loadNetworkUsageData(this.dataset.range);
+        });
+    });
+}
+
+function initializeDeviceSort() {
+    document.querySelectorAll('.sort-devices').forEach(link => {
+        link.addEventListener('click', function(e) {
+            e.preventDefault();
+            const sortBy = this.dataset.sort;
+            const tbody = document.getElementById('deviceTableBody');
+            const rows = Array.from(tbody.getElementsByTagName('tr'));
+
+            rows.sort((a, b) => {
+                let aVal = a.cells[getColumnIndex(sortBy)].textContent;
+                let bVal = b.cells[getColumnIndex(sortBy)].textContent;
+
+                if (sortBy === 'usage') {
+                    aVal = parseFloat(aVal);
+                    bVal = parseFloat(bVal);
+                }
+
+                if (aVal < bVal) return -1;
+                if (aVal > bVal) return 1;
+                return 0;
+            });
+
+            rows.forEach(row => tbody.appendChild(row));
+        });
+    });
+}
+
+function getColumnIndex(sortBy) {
+    switch(sortBy) {
+        case 'name': return 0;
+        case 'usage': return 4;
+        case 'last_seen': return 5;
+        default: return 0;
+    }
+}
+
+function toggleDevice(deviceId) {
+    fetchWithAuth(`/api/devices/${deviceId}/toggle`, { method: 'POST' })
+        .then(response => response.json())
+        .then(result => {
+            if (result.success) {
+                console.log(`Device ${deviceId} toggled successfully`);
+            } else {
+                console.error('Error toggling device:', result.error);
+            }
+        })
+        .catch(error => {
+            console.error('Error toggling device:', error);
+        });
 }
 
 document.addEventListener('DOMContentLoaded', function() {
@@ -247,7 +409,9 @@ document.addEventListener('DOMContentLoaded', function() {
         if (path === '/devices') {
             loadDevices();
         } else if (path === '/network_usage') {
-            loadNetworkUsageData();
+            loadNetworkUsageData('24h');
+            initializeTimeRangeButtons();
+            initializeDeviceSort();
         }
     }
 
@@ -289,18 +453,3 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 });
-
-function toggleDevice(deviceId) {
-    fetchWithAuth(`/api/devices/${deviceId}/toggle`, { method: 'POST' })
-        .then(response => response.json())
-        .then(result => {
-            if (result.success) {
-                console.log(`Device ${deviceId} toggled successfully`);
-            } else {
-                console.error('Error toggling device:', result.error);
-            }
-        })
-        .catch(error => {
-            console.error('Error toggling device:', error);
-        });
-}

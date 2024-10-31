@@ -4,18 +4,71 @@
 <h2>Network Usage Analytics</h2>
 
 <div class="row mb-4">
-    <div class="col-md-4">
-        <div class="card">
-            <div class="card-body">
-                <h5 class="card-title">Total Network Usage</h5>
-                <p class="card-text display-6">{{ (total_network_usage / (1024 * 1024)) | round(2) }} MB</p>
-            </div>
+    <div class="col-md-12">
+        <div class="btn-group mb-3" role="group" aria-label="Time range selector">
+            <button type="button" class="btn btn-secondary time-range-btn" data-range="24h">24 Hours</button>
+            <button type="button" class="btn btn-secondary time-range-btn" data-range="7d">7 Days</button>
+            <button type="button" class="btn btn-secondary time-range-btn" data-range="30d">30 Days</button>
         </div>
     </div>
+</div>
+
+<div class="row mb-4">
     <div class="col-md-8">
         <div class="card">
             <div class="card-body">
-                <h5 class="card-title">Top 5 Devices by Usage</h5>
+                <h5 class="card-title">Network Usage Over Time</h5>
+                <div class="chart-container" style="position: relative; height:400px;">
+                    <canvas id="networkUsageChart"></canvas>
+                </div>
+                <div class="text-center mt-2">
+                    <button class="btn btn-sm btn-secondary" id="resetZoom">Reset Zoom</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">Device Usage Distribution</h5>
+                <canvas id="deviceDistributionChart"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">Network Statistics</h5>
+                <div id="networkStats">
+                    <div class="d-flex justify-content-between mb-2">
+                        <span>Total Usage:</span>
+                        <span class="text-info" id="totalUsage">{{ (total_network_usage / (1024 * 1024)) | round(2) }} MB</span>
+                    </div>
+                    <div class="d-flex justify-content-between mb-2">
+                        <span>Peak Usage Time:</span>
+                        <span class="text-info" id="peakUsageTime">Loading...</span>
+                    </div>
+                    <div class="d-flex justify-content-between mb-2">
+                        <span>Current Trend:</span>
+                        <span id="usageTrend">
+                            <span class="text-success">↑ Increasing</span>
+                        </span>
+                    </div>
+                    <div class="d-flex justify-content-between">
+                        <span>Period Comparison:</span>
+                        <span class="text-info" id="periodComparison">Loading...</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">Top Devices</h5>
                 <div class="list-group">
                     {% for device in top_devices %}
                     <div class="list-group-item d-flex justify-content-between align-items-center">
@@ -34,28 +87,23 @@
     </div>
 </div>
 
-<div class="row mb-4">
-    <div class="col-md-12">
-        <div class="card">
-            <div class="card-body">
-                <h5 class="card-title">Hourly Network Usage (Last 24 Hours)</h5>
-                <canvas id="networkUsageChart"></canvas>
-            </div>
-        </div>
-    </div>
-</div>
-
-<div class="row mb-4">
-    <div class="col-md-12" id="networkUsageStats">
-        <!-- Network usage statistics will be populated by JavaScript -->
-    </div>
-</div>
-
 <div class="row">
     <div class="col-md-12">
         <div class="card">
             <div class="card-body">
-                <h5 class="card-title">All Devices Usage</h5>
+                <h5 class="card-title d-flex justify-content-between align-items-center">
+                    Device Usage Details
+                    <div class="btn-group">
+                        <button class="btn btn-sm btn-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">
+                            Sort By
+                        </button>
+                        <ul class="dropdown-menu">
+                            <li><a class="dropdown-item sort-devices" href="#" data-sort="name">Name</a></li>
+                            <li><a class="dropdown-item sort-devices" href="#" data-sort="usage">Usage</a></li>
+                            <li><a class="dropdown-item sort-devices" href="#" data-sort="last_seen">Last Seen</a></li>
+                        </ul>
+                    </div>
+                </h5>
                 <div class="table-responsive">
                     <table class="table table-striped">
                         <thead>
@@ -68,7 +116,7 @@
                                 <th>Last Seen</th>
                             </tr>
                         </thead>
-                        <tbody>
+                        <tbody id="deviceTableBody">
                             {% for device in devices %}
                             <tr>
                                 <td>{{ device.name }}</td>
@@ -92,4 +140,7 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+<script src="https://cdn.jsdelivr.net/npm/date-fns"></script>
 {% endblock %}

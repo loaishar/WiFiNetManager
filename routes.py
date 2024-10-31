@@ -10,8 +10,9 @@ from network_scanner import scan_network
 import logging
 from datetime import datetime, timedelta
 from flask_socketio import emit
-from sqlalchemy import func
+from sqlalchemy import func, desc
 import random
+import eventlet
 
 main = Blueprint('main', __name__)
 
@@ -53,17 +54,14 @@ def login():
         
         user = User.query.filter_by(username=username).first()
         if user and user.check_password(password):
-            # Create tokens with longer expiration
             access_token = create_access_token(
                 identity=user.id,
                 expires_delta=timedelta(hours=1)
             )
             refresh_token = create_refresh_token(identity=user.id)
             
-            # Create response with proper redirect
             response = make_response(redirect(url_for('main.devices')))
             
-            # Set cookie attributes
             set_access_cookies(response, access_token)
             set_refresh_cookies(response, refresh_token)
             
@@ -177,8 +175,7 @@ def scan():
                 existing_device.ip_address = device_data['ip_address']
                 existing_device.status = device_data['status']
                 existing_device.last_seen = device_data['last_seen']
-                # Update data usage randomly for demo purposes
-                existing_device.update_data_usage(random.randint(1000000, 10000000))  # 1-10 MB
+                existing_device.update_data_usage(random.randint(1000000, 10000000))
             else:
                 logging.debug(f"Adding new device: {device_data['name']}")
                 new_device = Device(
@@ -222,13 +219,11 @@ def network_usage():
         
         devices = Device.query.all()
         
-        # Calculate total usage for each device
         for device in devices:
             device.total_usage = db.session.query(func.sum(NetworkUsage.data_used)).filter(NetworkUsage.device_id == device.id).scalar() or 0
         
         total_network_usage = sum(device.total_usage for device in devices)
         
-        # Get hourly usage data for the last 24 hours
         end_time = datetime.utcnow()
         start_time = end_time - timedelta(days=1)
         hourly_usage = db.session.query(
@@ -239,7 +234,6 @@ def network_usage():
         
         hourly_data = [{'hour': entry.hour.isoformat(), 'usage': entry.usage} for entry in hourly_usage]
         
-        # Get top devices by usage
         top_devices = sorted(devices, key=lambda x: x.total_usage, reverse=True)[:5]
         
         return render_template('network_usage.html',
@@ -256,23 +250,52 @@ def network_usage():
 def get_network_usage():
     try:
         current_user = get_jwt_identity()
-        logging.info(f"User {current_user} fetching network usage data")
+        time_range = request.args.get('range', '24h')
         
         end_time = datetime.utcnow()
-        start_time = end_time - timedelta(days=1)
-        
-        # Get hourly usage data
-        hourly_usage = db.session.query(
-            func.date_trunc('hour', NetworkUsage.timestamp).label('hour'),
+        if time_range == '7d':
+            start_time = end_time - timedelta(days=7)
+            interval = 'hour'
+        elif time_range == '30d':
+            start_time = end_time - timedelta(days=30)
+            interval = 'day'
+        else:
+            start_time = end_time - timedelta(days=1)
+            interval = 'hour'
+
+        usage_data = db.session.query(
+            func.date_trunc(interval, NetworkUsage.timestamp).label('interval'),
             func.sum(NetworkUsage.data_used).label('usage')
-        ).filter(NetworkUsage.timestamp.between(start_time, end_time)
-        ).group_by('hour').order_by('hour').all()
-        
-        # Convert bytes to MB for better readability
-        labels = [entry.hour.strftime('%Y-%m-%d %H:%M') for entry in hourly_usage]
-        values = [float(entry.usage or 0) / (1024 * 1024) for entry in hourly_usage]
-        
-        # Get device-specific usage data
+        ).filter(
+            NetworkUsage.timestamp.between(start_time, end_time)
+        ).group_by('interval').order_by('interval').all()
+
+        total_usage = sum(entry.usage for entry in usage_data) if usage_data else 0
+        peak_usage = max((entry.usage for entry in usage_data), default=0)
+        peak_time = next(
+            (entry.interval for entry in usage_data if entry.usage == peak_usage),
+            None
+        )
+
+        if len(usage_data) > 1:
+            first_half = sum(entry.usage for entry in usage_data[:len(usage_data)//2])
+            second_half = sum(entry.usage for entry in usage_data[len(usage_data)//2:])
+            trend = (second_half - first_half) / first_half if first_half > 0 else 0
+        else:
+            trend = 0
+
+        previous_start = start_time - (end_time - start_time)
+        previous_usage = db.session.query(
+            func.sum(NetworkUsage.data_used)
+        ).filter(
+            NetworkUsage.timestamp.between(previous_start, start_time)
+        ).scalar() or 0
+
+        period_comparison = (
+            ((total_usage - previous_usage) / previous_usage * 100)
+            if previous_usage > 0 else 0
+        )
+
         devices = Device.query.all()
         device_usage = []
         for device in devices:
@@ -282,24 +305,31 @@ def get_network_usage():
                 NetworkUsage.device_id == device.id,
                 NetworkUsage.timestamp.between(start_time, end_time)
             ).first()
-            
+
             device_usage.append({
                 'name': device.name,
-                'usage': float(device_data.total_usage or 0) / (1024 * 1024)  # Convert to MB
+                'usage': float(device_data.total_usage or 0) / (1024 * 1024)
             })
-        
-        return jsonify({
-            'labels': labels,
-            'values': values,
-            'devices': sorted(device_usage, key=lambda x: x['usage'], reverse=True)
-        })
+
+        response_data = {
+            'labels': [entry.interval.isoformat() for entry in usage_data],
+            'values': [float(entry.usage or 0) / (1024 * 1024) for entry in usage_data],
+            'devices': sorted(device_usage, key=lambda x: x['usage'], reverse=True),
+            'statistics': {
+                'total_usage': float(total_usage) / (1024 * 1024),
+                'peak_usage_time': peak_time.strftime('%Y-%m-%d %H:%M') if peak_time else None,
+                'trend': trend,
+                'period_comparison': period_comparison
+            }
+        }
+
+        return jsonify(response_data)
     except Exception as e:
         logging.error(f"Error fetching network usage data: {str(e)}")
         return jsonify({'error': 'Internal server error'}), 500
 
 @socketio.on('connect')
 def handle_connect():
-    logging.info("WebSocket connection attempt")
     try:
         verify_jwt_in_request()
         current_user = get_jwt_identity()
@@ -312,3 +342,25 @@ def handle_connect():
 @socketio.on('disconnect')
 def handle_disconnect():
     logging.info('Client disconnected from WebSocket')
+
+def simulate_network_usage_updates():
+    while True:
+        try:
+            devices = Device.query.all()
+            for device in devices:
+                usage = random.randint(1000000, 10000000)
+                device.update_data_usage(usage)
+            db.session.commit()
+
+            with app.app_context():
+                response = get_network_usage()
+                emit('network_usage_update', response.json, broadcast=True)
+
+        except Exception as e:
+            logging.error(f"Error in network usage simulation: {str(e)}")
+        
+        eventlet.sleep(60)
+
+@socketio.on('connect')
+def start_usage_simulation():
+    eventlet.spawn(simulate_network_usage_updates)

@@ -5,7 +5,7 @@ from flask_jwt_extended import (
     verify_jwt_in_request
 )
 from extensions import db, jwt, socketio
-from models import User, Device, NetworkUsage
+from models import User, Device, NetworkUsage, NetworkSettings
 from network_scanner import scan_network
 import logging
 from datetime import datetime, timedelta
@@ -13,10 +13,22 @@ from flask_socketio import emit
 from sqlalchemy import func, desc
 import random
 import eventlet
+from functools import wraps
 
 main = Blueprint('main', __name__)
 
 logging.basicConfig(level=logging.DEBUG)
+
+def admin_required(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        verify_jwt_in_request()
+        current_user_id = get_jwt_identity()
+        user = User.query.get(current_user_id)
+        if not user or not user.is_admin:
+            return jsonify(msg="Admin access required"), 403
+        return fn(*args, **kwargs)
+    return wrapper
 
 @main.route('/')
 def index():
@@ -325,6 +337,109 @@ def get_network_usage():
         return jsonify(response_data)
     except Exception as e:
         logging.error(f"Error fetching network usage data: {str(e)}")
+        return jsonify({'error': 'Internal server error'}), 500
+
+@main.route('/admin')
+@admin_required
+def admin_dashboard():
+    try:
+        total_devices = Device.query.count()
+        active_devices = Device.query.filter_by(status=True).count()
+        blocked_devices = Device.query.filter_by(blocked=True).count()
+        
+        total_usage = db.session.query(func.sum(NetworkUsage.data_used)).scalar() or 0
+        
+        devices = Device.query.all()
+        network_settings = NetworkSettings.query.all()
+        
+        return render_template('admin/dashboard.html',
+                             total_devices=total_devices,
+                             active_devices=active_devices,
+                             blocked_devices=blocked_devices,
+                             total_usage=total_usage,
+                             devices=devices,
+                             network_settings=network_settings)
+    except Exception as e:
+        logging.error(f"Error accessing admin dashboard: {str(e)}")
+        return jsonify({'error': 'Internal server error'}), 500
+
+@main.route('/api/admin/settings', methods=['POST'])
+@admin_required
+def add_network_setting():
+    try:
+        data = request.get_json()
+        current_user_id = get_jwt_identity()
+        
+        setting = NetworkSettings(
+            setting_name=data['name'],
+            setting_value=data['value'],
+            description=data.get('description', ''),
+            modified_by=current_user_id
+        )
+        
+        db.session.add(setting)
+        db.session.commit()
+        
+        return jsonify({'success': True, 'setting_id': setting.id})
+    except Exception as e:
+        logging.error(f"Error adding network setting: {str(e)}")
+        db.session.rollback()
+        return jsonify({'error': 'Internal server error'}), 500
+
+@main.route('/api/admin/settings/<int:setting_id>', methods=['PUT', 'DELETE'])
+@admin_required
+def manage_network_setting(setting_id):
+    try:
+        setting = NetworkSettings.query.get_or_404(setting_id)
+        
+        if request.method == 'DELETE':
+            db.session.delete(setting)
+            db.session.commit()
+            return jsonify({'success': True})
+            
+        data = request.get_json()
+        setting.setting_value = data['value']
+        setting.description = data.get('description', setting.description)
+        setting.modified_by = get_jwt_identity()
+        
+        db.session.commit()
+        return jsonify({'success': True})
+    except Exception as e:
+        logging.error(f"Error managing network setting: {str(e)}")
+        db.session.rollback()
+        return jsonify({'error': 'Internal server error'}), 500
+
+@main.route('/api/admin/devices/<int:device_id>', methods=['PUT'])
+@admin_required
+def update_device(device_id):
+    try:
+        device = Device.query.get_or_404(device_id)
+        data = request.get_json()
+        
+        device.name = data.get('name', device.name)
+        device.bandwidth_limit = data.get('bandwidth_limit', device.bandwidth_limit)
+        device.notes = data.get('notes', device.notes)
+        
+        db.session.commit()
+        
+        device_data = {
+            'id': device.id,
+            'name': device.name,
+            'ip_address': device.ip_address,
+            'mac_address': device.mac_address,
+            'status': device.status,
+            'blocked': device.blocked,
+            'bandwidth_limit': device.bandwidth_limit,
+            'notes': device.notes,
+            'last_seen': device.last_seen.isoformat() if device.last_seen else None,
+            'data_usage': device.data_usage
+        }
+        
+        emit('device_updated', device_data, broadcast=True, namespace='/')
+        return jsonify({'success': True})
+    except Exception as e:
+        logging.error(f"Error updating device: {str(e)}")
+        db.session.rollback()
         return jsonify({'error': 'Internal server error'}), 500
 
 @socketio.on('connect')

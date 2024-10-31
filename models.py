@@ -8,6 +8,7 @@ class User(db.Model):
     username = db.Column(db.String(64), unique=True, nullable=False)
     email = db.Column(db.String(120), unique=True, nullable=False)
     password_hash = db.Column(db.String(256))
+    is_admin = db.Column(db.Boolean, default=False)
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -26,6 +27,8 @@ class Device(db.Model):
     last_seen = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     data_usage = db.Column(db.BigInteger, default=0)  # Total data usage in bytes
     last_usage_update = db.Column(db.DateTime, default=datetime.utcnow)
+    bandwidth_limit = db.Column(db.Integer, default=0)  # Bandwidth limit in Mbps (0 = unlimited)
+    notes = db.Column(db.Text, nullable=True)  # Admin notes about the device
 
     def update_data_usage(self, bytes_used):
         if self.data_usage is None:
@@ -53,3 +56,12 @@ class NetworkUsage(db.Model):
     data_used = db.Column(db.BigInteger)  # Data used in bytes
 
     device = db.relationship('Device', backref=db.backref('usage_history', lazy='dynamic'))
+
+class NetworkSettings(db.Model):
+    __tablename__ = 'network_settings'
+    id = db.Column(db.Integer, primary_key=True)
+    setting_name = db.Column(db.String(64), unique=True, nullable=False)
+    setting_value = db.Column(db.String(256))
+    description = db.Column(db.Text)
+    last_modified = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    modified_by = db.Column(db.Integer, db.ForeignKey('users.id'))

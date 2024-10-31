@@ -1,0 +1,225 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container-fluid">
+    <h2>Admin Dashboard</h2>
+    
+    <!-- Network Overview -->
+    <div class="row mb-4">
+        <div class="col-md-3">
+            <div class="card">
+                <div class="card-body">
+                    <h5 class="card-title">Total Devices</h5>
+                    <h2 class="card-text">{{ total_devices }}</h2>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card">
+                <div class="card-body">
+                    <h5 class="card-title">Active Devices</h5>
+                    <h2 class="card-text">{{ active_devices }}</h2>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card">
+                <div class="card-body">
+                    <h5 class="card-title">Blocked Devices</h5>
+                    <h2 class="card-text">{{ blocked_devices }}</h2>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card">
+                <div class="card-body">
+                    <h5 class="card-title">Total Data Usage</h5>
+                    <h2 class="card-text">{{ total_usage|filesizeformat }}</h2>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Network Settings -->
+    <div class="row mb-4">
+        <div class="col-md-12">
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0">Network Settings</h5>
+                    <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#settingsModal">
+                        Add Setting
+                    </button>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table">
+                            <thead>
+                                <tr>
+                                    <th>Setting Name</th>
+                                    <th>Value</th>
+                                    <th>Description</th>
+                                    <th>Last Modified</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for setting in network_settings %}
+                                <tr>
+                                    <td>{{ setting.setting_name }}</td>
+                                    <td>{{ setting.setting_value }}</td>
+                                    <td>{{ setting.description }}</td>
+                                    <td>{{ setting.last_modified.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                                    <td>
+                                        <button class="btn btn-sm btn-secondary edit-setting" 
+                                                data-setting-id="{{ setting.id }}"
+                                                data-bs-toggle="modal" 
+                                                data-bs-target="#editSettingModal">
+                                            Edit
+                                        </button>
+                                        <button class="btn btn-sm btn-danger delete-setting" 
+                                                data-setting-id="{{ setting.id }}">
+                                            Delete
+                                        </button>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Device Management -->
+    <div class="row">
+        <div class="col-md-12">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0">Device Management</h5>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table">
+                            <thead>
+                                <tr>
+                                    <th>Device Name</th>
+                                    <th>IP Address</th>
+                                    <th>MAC Address</th>
+                                    <th>Status</th>
+                                    <th>Data Usage</th>
+                                    <th>Bandwidth Limit</th>
+                                    <th>Notes</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for device in devices %}
+                                <tr>
+                                    <td>{{ device.name }}</td>
+                                    <td>{{ device.ip_address }}</td>
+                                    <td>{{ device.mac_address }}</td>
+                                    <td>
+                                        <span class="badge bg-{{ device.status and 'success' or 'danger' }}">
+                                            {{ device.status and 'Online' or 'Offline' }}
+                                        </span>
+                                    </td>
+                                    <td>{{ (device.data_usage / (1024 * 1024))|round(2) }} MB</td>
+                                    <td>
+                                        {% if device.bandwidth_limit == 0 %}
+                                            Unlimited
+                                        {% else %}
+                                            {{ device.bandwidth_limit }} Mbps
+                                        {% endif %}
+                                    </td>
+                                    <td>{{ device.notes or '' }}</td>
+                                    <td>
+                                        <button class="btn btn-sm btn-secondary edit-device" 
+                                                data-device-id="{{ device.id }}"
+                                                data-bs-toggle="modal" 
+                                                data-bs-target="#editDeviceModal">
+                                            Edit
+                                        </button>
+                                        <button class="btn btn-sm btn-{{ device.blocked and 'success' or 'danger' }} toggle-device" 
+                                                data-device-id="{{ device.id }}">
+                                            {{ device.blocked and 'Unblock' or 'Block' }}
+                                        </button>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Add Setting Modal -->
+<div class="modal fade" id="settingsModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Add Network Setting</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="addSettingForm">
+                    <div class="mb-3">
+                        <label for="settingName" class="form-label">Setting Name</label>
+                        <input type="text" class="form-control" id="settingName" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="settingValue" class="form-label">Value</label>
+                        <input type="text" class="form-control" id="settingValue" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="settingDescription" class="form-label">Description</label>
+                        <textarea class="form-control" id="settingDescription" rows="3"></textarea>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-primary" id="saveSettingBtn">Save Setting</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Edit Device Modal -->
+<div class="modal fade" id="editDeviceModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Edit Device</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="editDeviceForm">
+                    <input type="hidden" id="deviceId">
+                    <div class="mb-3">
+                        <label for="deviceName" class="form-label">Device Name</label>
+                        <input type="text" class="form-control" id="deviceName" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="bandwidthLimit" class="form-label">Bandwidth Limit (Mbps)</label>
+                        <input type="number" class="form-control" id="bandwidthLimit" min="0">
+                        <small class="form-text text-muted">0 for unlimited</small>
+                    </div>
+                    <div class="mb-3">
+                        <label for="deviceNotes" class="form-label">Notes</label>
+                        <textarea class="form-control" id="deviceNotes" rows="3"></textarea>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-primary" id="saveDeviceBtn">Save Changes</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}

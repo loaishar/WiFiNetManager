@@ -8,6 +8,14 @@ function getCookie(name) {
     if (parts.length === 2) return parts.pop().split(';').shift();
 }
 
+function checkAdminAccess() {
+    fetchWithAuth('/admin')
+        .catch(error => {
+            console.error('Error accessing admin page:', error);
+            window.location.href = '/login';
+        });
+}
+
 function fetchWithAuth(url, options = {}) {
     options.credentials = 'include';
 
@@ -31,6 +39,10 @@ function fetchWithAuth(url, options = {}) {
                     window.location.href = '/login';
                     throw error;
                 });
+            }
+            if (response.status === 403) {
+                window.location.href = '/login';
+                throw new Error('Access forbidden');
             }
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);

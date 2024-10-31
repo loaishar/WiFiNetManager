@@ -43,8 +43,11 @@ author = "agent"
 agentRequireRestartOnSave = false
 
 [[workflows.workflow.tasks]]
+task = "packager.installForAll"
+
+[[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "flask db migrate -m 'Add network usage data to Device model and create NetworkUsage model' && flask db upgrade"
+args = "flask db migrate -m 'Add is_admin field to User model' && flask db upgrade"
 
 [[workflows.workflow]]
 name = "Flask Server"
@@ -52,6 +55,9 @@ author = "agent"
 
 [workflows.workflow.metadata]
 agentRequireRestartOnSave = false
+
+[[workflows.workflow.tasks]]
+task = "packager.installForAll"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"

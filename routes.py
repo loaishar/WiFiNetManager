@@ -22,12 +22,16 @@ logging.basicConfig(level=logging.DEBUG)
 def admin_required(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
-        verify_jwt_in_request()
-        current_user_id = get_jwt_identity()
-        user = User.query.get(current_user_id)
-        if not user or not user.is_admin:
-            return jsonify(msg="Admin access required"), 403
-        return fn(*args, **kwargs)
+        try:
+            verify_jwt_in_request()
+            current_user_id = get_jwt_identity()
+            user = User.query.get(current_user_id)
+            if not user or not user.is_admin:
+                return redirect(url_for('main.login'))
+            return fn(*args, **kwargs)
+        except Exception as e:
+            logging.error(f"Admin access error: {str(e)}")
+            return redirect(url_for('main.login'))
     return wrapper
 
 @main.route('/')
@@ -68,18 +72,13 @@ def login():
         if user and user.check_password(password):
             access_token = create_access_token(
                 identity=user.id,
-                expires_delta=timedelta(hours=1)
+                additional_claims={'is_admin': user.is_admin}
             )
             refresh_token = create_refresh_token(identity=user.id)
             
             response = make_response(redirect(url_for('main.devices')))
-            
             set_access_cookies(response, access_token)
             set_refresh_cookies(response, refresh_token)
-            
-            logging.info(f"Login successful for user {username}")
-            logging.info(f"Access token cookie set: {access_token[:10]}...")
-            
             return response
         else:
             logging.warning(f"Failed login attempt for user {username}")

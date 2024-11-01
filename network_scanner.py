@@ -1,6 +1,5 @@
 import psutil
 import netifaces
-import scapy.all as scapy
 import logging
 import ipaddress
 from datetime import datetime
@@ -41,7 +40,7 @@ def get_ip_network():
         return None
 
 def get_device_name(ip):
-    """Try to get device hostname with improved error handling."""
+    """Try to get device hostname."""
     try:
         hostname = socket.gethostbyaddr(ip)[0]
         if hostname and not hostname.startswith('_'):
@@ -54,7 +53,7 @@ def get_device_name(ip):
     return f"Device-{ip.split('.')[-1]}"
 
 def get_total_network_usage():
-    """Get total network usage for all interfaces."""
+    """Get total network usage across all interfaces."""
     try:
         io_counters = psutil.net_io_counters()
         return {
@@ -66,48 +65,43 @@ def get_total_network_usage():
         logging.error(f"Error getting total network usage: {str(e)}")
         return None
 
-def arp_scan(ip_range):
-    """Perform ARP scan to discover devices."""
-    devices = []
-    try:
-        if not ip_range:
-            logging.error("No valid IP range provided for ARP scan")
-            return devices
-
-        arp_request = scapy.ARP(pdst=ip_range)
-        broadcast = scapy.Ether(dst="ff:ff:ff:ff:ff:ff")
-        arp_request_broadcast = broadcast/arp_request
-        
-        answered_list = scapy.srp(arp_request_broadcast, timeout=3, verbose=False)[0]
-        
-        for element in answered_list:
-            ip_address = element[1].psrc
-            mac_address = element[1].hwsrc
-            
-            device = {
-                'ip_address': ip_address,
-                'mac_address': mac_address,
-                'name': get_device_name(ip_address),
-                'status': True,
-                'blocked': False,
-                'last_seen': datetime.utcnow()
-            }
-            devices.append(device)
-            logging.debug(f"Found device: {device['name']} ({device['ip_address']})")
-    except Exception as e:
-        logging.error(f"Error during ARP scan: {str(e)}")
-    return devices
-
 def scan_network():
-    """Scan network and return list of devices."""
+    """Scan network using available system tools."""
     logging.info("Starting network scan")
-    ip_range = get_ip_network()
+    devices = []
     
-    if not ip_range:
-        logging.error("Could not determine network range")
-        return []
+    try:
+        # Get list of all network connections
+        connections = psutil.net_connections(kind='inet')
+        established_ips = set()
+        
+        # Get established connections
+        for conn in connections:
+            if conn.status == 'ESTABLISHED' and conn.raddr:
+                ip = conn.raddr.ip
+                if not ip.startswith('127.'):
+                    established_ips.add(ip)
+        
+        # Create device entries for established connections
+        for ip in established_ips:
+            try:
+                device = {
+                    'ip_address': ip,
+                    'mac_address': f"unknown-{ip.replace('.', '-')}",  # Placeholder MAC
+                    'name': get_device_name(ip),
+                    'status': True,
+                    'blocked': False,
+                    'last_seen': datetime.utcnow()
+                }
+                devices.append(device)
+                logging.debug(f"Found device: {device['name']} ({device['ip_address']})")
+            except Exception as e:
+                logging.error(f"Error processing device {ip}: {str(e)}")
+                continue
+                
+    except Exception as e:
+        logging.error(f"Error during network scan: {str(e)}")
     
-    devices = arp_scan(ip_range)
     logging.info(f"Found {len(devices)} devices")
     return devices
 
@@ -131,14 +125,16 @@ def start_total_usage_monitoring():
                         bytes_sent = current_usage['bytes_sent'] - previous_usage['bytes_sent']
                         bytes_recv = current_usage['bytes_recv'] - previous_usage['bytes_recv']
                         
-                        total_usage = TotalNetworkUsage(
-                            timestamp=current_usage['timestamp'],
-                            bytes_sent=bytes_sent,
-                            bytes_recv=bytes_recv
-                        )
-                        db.session.add(total_usage)
-                        db.session.commit()
-                        logging.debug(f"Recorded network usage: sent={bytes_sent}, recv={bytes_recv}")
+                        # Only record if there's actual network activity
+                        if bytes_sent >= 0 and bytes_recv >= 0:
+                            total_usage = TotalNetworkUsage(
+                                timestamp=current_usage['timestamp'],
+                                bytes_sent=bytes_sent,
+                                bytes_recv=bytes_recv
+                            )
+                            db.session.add(total_usage)
+                            db.session.commit()
+                            logging.debug(f"Recorded network usage: sent={bytes_sent}, recv={bytes_recv}")
                         
                         previous_usage = current_usage
             except Exception as e:

@@ -66,39 +66,50 @@ def get_total_network_usage():
         return None
 
 def scan_network():
-    """Scan network using available system tools."""
+    """Scan network using ARP to discover real devices."""
     logging.info("Starting network scan")
     devices = []
     
     try:
-        # Get list of all network connections
-        connections = psutil.net_connections(kind='inet')
-        established_ips = set()
+        # Get current network CIDR
+        network_cidr = get_ip_network()
+        if not network_cidr:
+            logging.error("Could not determine network CIDR")
+            return devices
+
+        logging.info(f"Scanning network: {network_cidr}")
         
-        # Get established connections
-        for conn in connections:
-            if conn.status == 'ESTABLISHED' and conn.raddr:
-                ip = conn.raddr.ip
-                if not ip.startswith('127.'):
-                    established_ips.add(ip)
+        # Import scapy here to avoid import issues
+        from scapy.all import ARP, Ether, srp
         
-        # Create device entries for established connections
-        for ip in established_ips:
-            try:
-                device = {
-                    'ip_address': ip,
-                    'mac_address': f"unknown-{ip.replace('.', '-')}",  # Placeholder MAC
-                    'name': get_device_name(ip),
-                    'status': True,
-                    'blocked': False,
-                    'last_seen': datetime.utcnow()
-                }
-                devices.append(device)
-                logging.debug(f"Found device: {device['name']} ({device['ip_address']})")
-            except Exception as e:
-                logging.error(f"Error processing device {ip}: {str(e)}")
+        # Create ARP request packet
+        arp_request = ARP(pdst=network_cidr)
+        broadcast = Ether(dst="ff:ff:ff:ff:ff:ff")
+        arp_request_broadcast = broadcast/arp_request
+        
+        # Send ARP request and get responses
+        answered_list = srp(arp_request_broadcast, timeout=3, verbose=False)[0]
+        
+        # Process responses
+        for element in answered_list:
+            ip_address = element[1].psrc
+            mac_address = element[1].hwsrc
+            
+            # Skip localhost
+            if ip_address.startswith('127.'):
                 continue
                 
+            device = {
+                'ip_address': ip_address,
+                'mac_address': mac_address,
+                'name': get_device_name(ip_address),
+                'status': True,
+                'blocked': False,
+                'last_seen': datetime.utcnow()
+            }
+            devices.append(device)
+            logging.debug(f"Found device: {device['name']} ({device['ip_address']})")
+            
     except Exception as e:
         logging.error(f"Error during network scan: {str(e)}")
     

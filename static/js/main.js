@@ -1,6 +1,5 @@
 let socket;
 let networkUsageChart = null;
-let deviceDistributionChart = null;
 
 function getCookie(name) {
     const value = `; ${document.cookie}`;
@@ -160,11 +159,10 @@ function loadNetworkUsageData(timeRange = '24h') {
             if (data.error) {
                 throw new Error(data.error);
             }
-            if (!data.devices || !data.labels || !data.values) {
+            if (!data.labels || !data.values) {
                 throw new Error('Invalid data format received');
             }
             renderNetworkUsageChart(data);
-            renderDeviceDistributionChart(data.devices);
             updateNetworkStats(data);
         })
         .catch(error => {
@@ -257,88 +255,31 @@ function renderNetworkUsageChart(data) {
     });
 }
 
-function renderDeviceDistributionChart(devices) {
-    const ctx = document.getElementById('deviceDistributionChart');
-    if (!ctx) return;
-
-    const deviceData = devices.map(device => ({
-        name: device.name,
-        usage: device.usage
-    }));
-
-    const data = {
-        labels: deviceData.map(d => d.name),
-        datasets: [{
-            data: deviceData.map(d => d.usage),
-            backgroundColor: [
-                'rgba(255, 99, 132, 0.8)',
-                'rgba(54, 162, 235, 0.8)',
-                'rgba(255, 206, 86, 0.8)',
-                'rgba(75, 192, 192, 0.8)',
-                'rgba(153, 102, 255, 0.8)'
-            ]
-        }]
-    };
-
-    if (deviceDistributionChart) {
-        deviceDistributionChart.destroy();
-    }
-
-    deviceDistributionChart = new Chart(ctx, {
-        type: 'pie',
-        data: data,
-        options: {
-            responsive: true,
-            plugins: {
-                legend: {
-                    position: 'bottom'
-                },
-                tooltip: {
-                    callbacks: {
-                        label: function(context) {
-                            return `${context.label}: ${context.parsed.toFixed(2)} MB`;
-                        }
-                    }
-                }
-            }
-        }
-    });
-}
-
 function updateNetworkStats(data) {
     const stats = data.statistics;
     if (!stats) return;
 
-    document.getElementById('totalUsage').textContent = `${stats.total_usage.toFixed(2)} MB`;
-    document.getElementById('peakUsageTime').textContent = stats.peak_usage_time;
-    
+    const totalUsageElement = document.getElementById('totalUsage');
+    const peakUsageTimeElement = document.getElementById('peakUsageTime');
     const trendElement = document.getElementById('usageTrend');
-    if (stats.trend > 0) {
-        trendElement.innerHTML = '<span class="text-success">↑ Increasing</span>';
-    } else if (stats.trend < 0) {
-        trendElement.innerHTML = '<span class="text-danger">↓ Decreasing</span>';
-    } else {
-        trendElement.innerHTML = '<span class="text-warning">→ Stable</span>';
+
+    if (totalUsageElement) {
+        totalUsageElement.textContent = `${stats.total_usage.toFixed(2)} MB`;
     }
 
-    document.getElementById('periodComparison').textContent = 
-        `${stats.period_comparison > 0 ? '+' : ''}${stats.period_comparison}% vs previous`;
-}
+    if (peakUsageTimeElement && stats.peak_usage_time) {
+        peakUsageTimeElement.textContent = stats.peak_usage_time;
+    }
 
-function updateNetworkUsageChart(data) {
-    if (!data || !data.labels || !data.values) return;
-    
-    networkUsageChart.data.labels = data.labels;
-    networkUsageChart.data.datasets[0].data = data.values;
-    networkUsageChart.update('none');
-}
-
-function updateDeviceDistributionChart(devices) {
-    if (!devices || !devices.length) return;
-    
-    deviceDistributionChart.data.labels = devices.map(d => d.name);
-    deviceDistributionChart.data.datasets[0].data = devices.map(d => d.usage);
-    deviceDistributionChart.update('none');
+    if (trendElement) {
+        if (stats.trend > 0) {
+            trendElement.innerHTML = '<span class="text-success">↑ Increasing</span>';
+        } else if (stats.trend < 0) {
+            trendElement.innerHTML = '<span class="text-danger">↓ Decreasing</span>';
+        } else {
+            trendElement.innerHTML = '<span class="text-warning">→ Stable</span>';
+        }
+    }
 }
 
 function initializeTimeRangeButtons() {
@@ -350,57 +291,6 @@ function initializeTimeRangeButtons() {
             loadNetworkUsageData(this.dataset.range);
         });
     });
-}
-
-function initializeDeviceSort() {
-    document.querySelectorAll('.sort-devices').forEach(link => {
-        link.addEventListener('click', function(e) {
-            e.preventDefault();
-            const sortBy = this.dataset.sort;
-            const tbody = document.getElementById('deviceTableBody');
-            const rows = Array.from(tbody.getElementsByTagName('tr'));
-
-            rows.sort((a, b) => {
-                let aVal = a.cells[getColumnIndex(sortBy)].textContent;
-                let bVal = b.cells[getColumnIndex(sortBy)].textContent;
-
-                if (sortBy === 'usage') {
-                    aVal = parseFloat(aVal);
-                    bVal = parseFloat(bVal);
-                }
-
-                if (aVal < bVal) return -1;
-                if (aVal > bVal) return 1;
-                return 0;
-            });
-
-            rows.forEach(row => tbody.appendChild(row));
-        });
-    });
-}
-
-function getColumnIndex(sortBy) {
-    switch(sortBy) {
-        case 'name': return 0;
-        case 'usage': return 4;
-        case 'last_seen': return 5;
-        default: return 0;
-    }
-}
-
-function toggleDevice(deviceId) {
-    fetchWithAuth(`/api/devices/${deviceId}/toggle`, { method: 'POST' })
-        .then(response => response.json())
-        .then(result => {
-            if (result.success) {
-                console.log(`Device ${deviceId} toggled successfully`);
-            } else {
-                console.error('Error toggling device:', result.error);
-            }
-        })
-        .catch(error => {
-            console.error('Error toggling device:', error);
-        });
 }
 
 function initializeSocket() {
@@ -458,10 +348,9 @@ function initializeSocket() {
     socket.on('network_usage_update', function(data) {
         console.log('Network usage update received:', data);
         if (networkUsageChart) {
-            updateNetworkUsageChart(data);
-        }
-        if (deviceDistributionChart) {
-            updateDeviceDistributionChart(data.devices);
+            networkUsageChart.data.labels = data.labels;
+            networkUsageChart.data.datasets[0].data = data.values;
+            networkUsageChart.update('none');
         }
         updateNetworkStats(data);
     });
@@ -479,7 +368,6 @@ document.addEventListener('DOMContentLoaded', function() {
         } else if (path === '/network_usage') {
             loadNetworkUsageData('24h');
             initializeTimeRangeButtons();
-            initializeDeviceSort();
         }
     }
 
@@ -521,3 +409,18 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 });
+
+function toggleDevice(deviceId) {
+    fetchWithAuth(`/api/devices/${deviceId}/toggle`, { method: 'POST' })
+        .then(response => response.json())
+        .then(result => {
+            if (result.success) {
+                console.log(`Device ${deviceId} toggled successfully`);
+            } else {
+                console.error('Error toggling device:', result.error);
+            }
+        })
+        .catch(error => {
+            console.error('Error toggling device:', error);
+        });
+}

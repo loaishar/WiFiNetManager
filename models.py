@@ -26,54 +26,8 @@ class Device(db.Model):
     status = db.Column(db.Boolean, default=True)
     blocked = db.Column(db.Boolean, default=False)
     last_seen = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    data_usage = db.Column(db.BigInteger, default=0)  # Total data usage in bytes
-    last_usage_update = db.Column(db.DateTime, default=datetime.utcnow)
     bandwidth_limit = db.Column(db.Integer, default=0)  # Bandwidth limit in Mbps (0 = unlimited)
     notes = db.Column(db.Text, nullable=True)  # Admin notes about the device
-
-    def update_data_usage(self, bytes_used):
-        """Update device data usage with actual network statistics."""
-        try:
-            if not isinstance(bytes_used, (int, float)) or bytes_used < 0:
-                logging.error(f"Invalid bytes_used value for device {self.name}: {bytes_used}")
-                return
-
-            # Calculate the difference since last update
-            if self.data_usage is None:
-                self.data_usage = 0
-            
-            # Only update if we have new data
-            if bytes_used > self.data_usage:
-                new_bytes = bytes_used - self.data_usage
-                self.data_usage = bytes_used
-                self.last_usage_update = datetime.utcnow()
-                
-                # Record the usage increment
-                new_usage = NetworkUsage(
-                    device_id=self.id,
-                    data_used=new_bytes,
-                    timestamp=datetime.utcnow()
-                )
-                db.session.add(new_usage)
-                logging.debug(f"Updated data usage for device {self.name}: +{new_bytes} bytes")
-        except Exception as e:
-            logging.error(f"Error updating data usage for device {self.name}: {str(e)}")
-            db.session.rollback()
-
-    def get_hourly_usage(self):
-        """Get hourly network usage statistics for the device."""
-        try:
-            hourly_usage = db.session.query(
-                db.func.date_trunc('hour', NetworkUsage.timestamp).label('hour'),
-                db.func.sum(NetworkUsage.data_used).label('total_usage')
-            ).filter(NetworkUsage.device_id == self.id)\
-             .group_by('hour')\
-             .order_by('hour')\
-             .all()
-            return [(usage.hour, usage.total_usage) for usage in hourly_usage]
-        except Exception as e:
-            logging.error(f"Error getting hourly usage for device {self.name}: {str(e)}")
-            return []
 
 class NetworkUsage(db.Model):
     __tablename__ = 'network_usage'

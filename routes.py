@@ -5,8 +5,8 @@ from flask_jwt_extended import (
     verify_jwt_in_request
 )
 from extensions import db, jwt, socketio
-from models import User, Device, NetworkUsage, NetworkSettings
-from network_scanner import scan_network
+from models import User, Device, NetworkUsage, NetworkSettings, TotalNetworkUsage
+from network_scanner import scan_network, get_total_network_usage
 import logging
 from datetime import datetime, timedelta
 from flask_socketio import emit
@@ -153,8 +153,7 @@ def get_devices():
             'mac_address': device.mac_address,
             'status': device.status,
             'blocked': device.blocked,
-            'last_seen': device.last_seen.isoformat() if device.last_seen else None,
-            'data_usage': device.data_usage
+            'last_seen': device.last_seen.isoformat() if device.last_seen else None
         } for device in devices])
     except Exception as e:
         logging.error(f"Error fetching devices: {str(e)}")
@@ -177,8 +176,7 @@ def toggle_device(device_id):
             'mac_address': device.mac_address,
             'status': device.status,
             'blocked': device.blocked,
-            'last_seen': device.last_seen.isoformat() if device.last_seen else None,
-            'data_usage': device.data_usage
+            'last_seen': device.last_seen.isoformat() if device.last_seen else None
         }
         
         emit('device_updated', device_data, broadcast=True, namespace='/')
@@ -205,8 +203,6 @@ def scan():
                 existing_device.ip_address = device_data['ip_address']
                 existing_device.status = device_data['status']
                 existing_device.last_seen = device_data['last_seen']
-                if 'data_usage' in device_data:
-                    existing_device.update_data_usage(device_data['data_usage'])
             else:
                 logging.debug(f"Adding new device: {device_data['name']}")
                 new_device = Device(
@@ -217,8 +213,6 @@ def scan():
                     blocked=device_data['blocked'],
                     last_seen=device_data['last_seen']
                 )
-                if 'data_usage' in device_data:
-                    new_device.data_usage = device_data['data_usage']
                 db.session.add(new_device)
         
         db.session.commit()
@@ -231,8 +225,7 @@ def scan():
             'mac_address': device.mac_address,
             'status': device.status,
             'blocked': device.blocked,
-            'last_seen': device.last_seen.isoformat() if device.last_seen else None,
-            'data_usage': device.data_usage
+            'last_seen': device.last_seen.isoformat() if device.last_seen else None
         } for device in devices]
         
         emit('devices_update', devices_data, broadcast=True, namespace='/')
@@ -251,30 +244,27 @@ def network_usage():
         current_user = get_jwt_identity()
         logging.info(f"User {current_user} accessing network usage page")
         
-        devices = Device.query.all()
-        
-        for device in devices:
-            device.total_usage = db.session.query(func.sum(NetworkUsage.data_used)).filter(NetworkUsage.device_id == device.id).scalar() or 0
-        
-        total_network_usage = sum(device.total_usage for device in devices)
-        
         end_time = datetime.utcnow()
         start_time = end_time - timedelta(days=1)
+        
+        total_usage = db.session.query(
+            func.sum(TotalNetworkUsage.bytes_sent + TotalNetworkUsage.bytes_recv)
+        ).filter(
+            TotalNetworkUsage.timestamp.between(start_time, end_time)
+        ).scalar() or 0
+        
         hourly_usage = db.session.query(
-            func.date_trunc('hour', NetworkUsage.timestamp).label('hour'),
-            func.sum(NetworkUsage.data_used).label('usage')
-        ).filter(NetworkUsage.timestamp.between(start_time, end_time)
+            func.date_trunc('hour', TotalNetworkUsage.timestamp).label('hour'),
+            func.sum(TotalNetworkUsage.bytes_sent + TotalNetworkUsage.bytes_recv).label('usage')
+        ).filter(
+            TotalNetworkUsage.timestamp.between(start_time, end_time)
         ).group_by('hour').order_by('hour').all()
         
         hourly_data = [{'hour': entry.hour.isoformat(), 'usage': entry.usage} for entry in hourly_usage]
         
-        top_devices = sorted(devices, key=lambda x: x.total_usage, reverse=True)[:5]
-        
         return render_template('network_usage.html',
-                             devices=devices,
-                             total_network_usage=total_network_usage,
-                             hourly_data=hourly_data,
-                             top_devices=top_devices)
+                             total_network_usage=total_usage,
+                             hourly_data=hourly_data)
     except Exception as e:
         logging.error(f"Error accessing network usage page: {str(e)}")
         return jsonify({'error': 'Internal server error'}), 500
@@ -283,25 +273,24 @@ def network_usage():
 @jwt_required()
 def get_network_usage():
     try:
-        current_user = get_jwt_identity()
         time_range = request.args.get('range', '24h')
-        
         end_time = datetime.utcnow()
+        
         if time_range == '7d':
             start_time = end_time - timedelta(days=7)
             interval = 'hour'
         elif time_range == '30d':
             start_time = end_time - timedelta(days=30)
             interval = 'day'
-        else:
+        else:  # 24h
             start_time = end_time - timedelta(days=1)
             interval = 'hour'
 
         usage_data = db.session.query(
-            func.date_trunc(interval, NetworkUsage.timestamp).label('interval'),
-            func.sum(NetworkUsage.data_used).label('usage')
+            func.date_trunc(interval, TotalNetworkUsage.timestamp).label('interval'),
+            func.sum(TotalNetworkUsage.bytes_sent + TotalNetworkUsage.bytes_recv).label('usage')
         ).filter(
-            NetworkUsage.timestamp.between(start_time, end_time)
+            TotalNetworkUsage.timestamp.between(start_time, end_time)
         ).group_by('interval').order_by('interval').all()
 
         total_usage = sum(entry.usage for entry in usage_data) if usage_data else 0
@@ -318,30 +307,13 @@ def get_network_usage():
         else:
             trend = 0
 
-        devices = Device.query.all()
-        device_usage = []
-        for device in devices:
-            device_data = db.session.query(
-                func.sum(NetworkUsage.data_used).label('total_usage')
-            ).filter(
-                NetworkUsage.device_id == device.id,
-                NetworkUsage.timestamp.between(start_time, end_time)
-            ).first()
-
-            device_usage.append({
-                'name': device.name,
-                'usage': float(device_data.total_usage or 0) / (1024 * 1024)  # Convert to MB
-            })
-
         response_data = {
             'labels': [entry.interval.isoformat() for entry in usage_data],
             'values': [float(entry.usage or 0) / (1024 * 1024) for entry in usage_data],  # Convert to MB
-            'devices': sorted(device_usage, key=lambda x: x['usage'], reverse=True),
             'statistics': {
                 'total_usage': float(total_usage) / (1024 * 1024),  # Convert to MB
                 'peak_usage_time': peak_time.strftime('%Y-%m-%d %H:%M') if peak_time else None,
-                'trend': trend,
-                'period_comparison': 0  # Reset to 0 since we're using real data
+                'trend': trend
             }
         }
 
@@ -358,7 +330,7 @@ def admin_dashboard():
         active_devices = Device.query.filter_by(status=True).count()
         blocked_devices = Device.query.filter_by(blocked=True).count()
         
-        total_usage = db.session.query(func.sum(NetworkUsage.data_used)).scalar() or 0
+        total_usage = db.session.query(func.sum(TotalNetworkUsage.bytes_sent + TotalNetworkUsage.bytes_recv)).scalar() or 0
         
         devices = Device.query.all()
         network_settings = NetworkSettings.query.all()
@@ -442,8 +414,7 @@ def update_device(device_id):
             'blocked': device.blocked,
             'bandwidth_limit': device.bandwidth_limit,
             'notes': device.notes,
-            'last_seen': device.last_seen.isoformat() if device.last_seen else None,
-            'data_usage': device.data_usage
+            'last_seen': device.last_seen.isoformat() if device.last_seen else None
         }
         
         emit('device_updated', device_data, broadcast=True, namespace='/')

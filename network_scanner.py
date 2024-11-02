@@ -9,91 +9,7 @@ import time
 import os
 import subprocess
 import re
-import json
-import requests
-
-def get_service_name(port):
-    """Get service name for common ports."""
-    common_services = {
-        21: 'FTP',
-        22: 'SSH',
-        23: 'Telnet',
-        25: 'SMTP',
-        53: 'DNS',
-        80: 'HTTP',
-        443: 'HTTPS',
-        3306: 'MySQL',
-        5432: 'PostgreSQL',
-        8080: 'HTTP-Alt'
-    }
-    return common_services.get(port, f'Port-{port}')
-
-def get_vendor_from_mac(mac_address):
-    """Get vendor information from MAC address using macvendors.com API."""
-    try:
-        url = f'https://api.macvendors.com/{mac_address}'
-        response = requests.get(url)
-        if response.status_code == 200:
-            return response.text
-        return 'Unknown Vendor'
-    except:
-        return 'Unknown Vendor'
-
-def detect_device_type(open_ports, os_type):
-    """Detect device type based on open ports and OS."""
-    if os_type and 'windows' in os_type.lower():
-        return 'Windows PC'
-    elif os_type and 'mac' in os_type.lower():
-        return 'Mac Device'
-    elif os_type and 'linux' in os_type.lower():
-        return 'Linux Device'
-    elif 80 in [p['port'] for p in open_ports] or 443 in [p['port'] for p in open_ports]:
-        return 'IoT Device'
-    return 'Unknown Device'
-
-def detect_os(ip_address):
-    """Detect operating system using TTL values."""
-    try:
-        proc = subprocess.Popen(['ping', '-c', '1', ip_address], stdout=subprocess.PIPE)
-        output = proc.communicate()[0].decode()
-        if 'ttl=64' in output.lower():
-            return 'Linux/Unix'
-        elif 'ttl=128' in output.lower():
-            return 'Windows'
-        elif 'ttl=254' in output.lower():
-            return 'Solaris/AIX'
-        return 'Unknown OS'
-    except:
-        return 'Unknown OS'
-
-def scan_device_ports(ip_address, common_ports=[80, 443, 22, 21, 23, 25, 53, 3306, 5432, 8080]):
-    """Scan for open ports on a device."""
-    open_ports = []
-    for port in common_ports:
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(0.1)
-            result = sock.connect_ex((ip_address, port))
-            if result == 0:
-                service = get_service_name(port)
-                open_ports.append({'port': port, 'service': service})
-            sock.close()
-        except:
-            continue
-    return open_ports
-
-def send_wol(mac_address):
-    """Send Wake-on-LAN magic packet."""
-    try:
-        mac_bytes = bytes.fromhex(mac_address.replace(':', ''))
-        magic_packet = b'\xff' * 6 + mac_bytes * 16
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        sock.sendto(magic_packet, ('<broadcast>', 9))
-        return True
-    except Exception as e:
-        logging.error(f"Error sending WoL packet: {e}")
-        return False
+from extensions import socketio
 
 def get_network_interfaces():
     """Get all active network interfaces."""
@@ -112,23 +28,11 @@ def get_network_interfaces():
         logging.error(f"Error getting network interfaces: {str(e)}")
         return []
 
-def get_network_speed(ip_address):
-    """Measure network speed to a device."""
-    try:
-        start_time = time.time()
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(1)
-        sock.connect((ip_address, 80))
-        end_time = time.time()
-        sock.close()
-        return 1 / (end_time - start_time)  # Rough estimate in Mbps
-    except:
-        return 0
-
 def scan_network():
-    """Enhanced network scanning with device fingerprinting."""
+    """Scan network for devices using multiple detection methods."""
     devices = []
     try:
+        # Get all network interfaces
         interfaces = get_network_interfaces()
         if not interfaces:
             logging.error("No network interfaces found")
@@ -144,58 +48,75 @@ def scan_network():
                 ip = ip_info['addr']
                 netmask = ip_info['netmask']
 
+                # Create network address for scanning
                 network = ipaddress.IPv4Network(f"{ip}/{netmask}", strict=False)
                 logging.info(f"Scanning network {network} on interface {iface}")
 
+                # Use multiple methods to scan for devices
                 for host in network.hosts():
                     host_str = str(host)
-                    if host_str == ip:
+                    if host_str == ip:  # Skip our own IP
                         continue
 
                     try:
-                        # Basic connectivity check
-                        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                        sock.settimeout(0.1)
-                        result = sock.connect_ex((host_str, 80))
-                        sock.close()
+                        # Try connecting to common ports
+                        is_up = False
+                        for port in [80, 443, 22, 445]:
+                            try:
+                                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                                sock.settimeout(0.5)  # Increased timeout
+                                if sock.connect_ex((host_str, port)) == 0:
+                                    is_up = True
+                                    break
+                            finally:
+                                sock.close()
 
-                        if result in [0, 111]:  # Host is up
-                            # Get device information
+                        # Try ping if port scanning didn't work
+                        if not is_up:
+                            try:
+                                response = subprocess.run(
+                                    ['ping', '-c', '1', '-W', '1', host_str],
+                                    stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE,
+                                    timeout=1
+                                )
+                                is_up = response.returncode == 0
+                            except:
+                                pass
+
+                        if is_up:
+                            # Get hostname
                             try:
                                 hostname = socket.gethostbyaddr(host_str)[0]
                             except:
                                 hostname = f"Device-{host_str.split('.')[-1]}"
 
-                            # Get MAC address
-                            mac = None
+                            # Get MAC address using arp -n
+                            mac_address = None
                             try:
-                                with open('/proc/net/arp', 'r') as f:
-                                    for line in f.readlines()[1:]:
-                                        fields = line.strip().split()
-                                        if fields[0] == host_str:
-                                            mac = fields[3]
-                                            break
+                                response = subprocess.run(
+                                    ['arp', '-n', host_str],
+                                    stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE,
+                                    timeout=1
+                                )
+                                if response.returncode == 0:
+                                    output = response.stdout.decode()
+                                    matches = re.findall(r'([0-9A-Fa-f]{2}[:-][0-9A-Fa-f]{2}[:-][0-9A-Fa-f]{2}[:-][0-9A-Fa-f]{2}[:-][0-9A-Fa-f]{2}[:-][0-9A-Fa-f]{2})', output)
+                                    if matches:
+                                        mac_address = matches[0]
                             except:
-                                mac = f"Unknown-{host_str.replace('.', '-')}"
+                                pass
 
-                            # Enhanced device information
-                            open_ports = scan_device_ports(host_str)
-                            os_type = detect_os(host_str)
-                            vendor = get_vendor_from_mac(mac) if mac else 'Unknown'
-                            device_type = detect_device_type(open_ports, os_type)
-                            network_speed = get_network_speed(host_str)
+                            if not mac_address:
+                                mac_address = f"Unknown-{host_str.replace('.', '-')}"
 
                             device = {
                                 'ip_address': host_str,
-                                'mac_address': mac,
+                                'mac_address': mac_address,
                                 'name': hostname,
                                 'status': True,
                                 'blocked': False,
-                                'device_type': device_type,
-                                'vendor': vendor,
-                                'os_type': os_type,
-                                'open_ports': open_ports,
-                                'network_speed': network_speed,
                                 'last_seen': datetime.utcnow()
                             }
                             devices.append(device)
@@ -265,21 +186,52 @@ def start_total_usage_monitoring():
                     devices = Device.query.all()
                     for device in devices:
                         try:
-                            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                            sock.settimeout(0.1)
-                            result = sock.connect_ex((device.ip_address, 80))
-                            sock.close()
-                            
-                            current_status = result in [0, 111]
-                            if current_status != device.status:
-                                device.status = current_status
+                            is_up = False
+                            # Try common ports first
+                            for port in [80, 443, 22, 445]:
+                                try:
+                                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                                    sock.settimeout(0.5)
+                                    if sock.connect_ex((device.ip_address, port)) == 0:
+                                        is_up = True
+                                        break
+                                finally:
+                                    sock.close()
+
+                            # Try ping if port scanning didn't work
+                            if not is_up:
+                                try:
+                                    response = subprocess.run(
+                                        ['ping', '-c', '1', '-W', '1', device.ip_address],
+                                        stdout=subprocess.PIPE,
+                                        stderr=subprocess.PIPE,
+                                        timeout=1
+                                    )
+                                    is_up = response.returncode == 0
+                                except:
+                                    pass
+
+                            if is_up != device.status:
+                                device.status = is_up
                                 history = DeviceHistory(
                                     device_id=device.id,
-                                    event_type='connected' if current_status else 'disconnected',
-                                    connection_speed=get_network_speed(device.ip_address) if current_status else 0
+                                    event_type='connected' if is_up else 'disconnected'
                                 )
                                 db.session.add(history)
-                        except:
+
+                                # Emit device status update via Socket.IO
+                                device_data = {
+                                    'id': device.id,
+                                    'name': device.name,
+                                    'ip_address': device.ip_address,
+                                    'mac_address': device.mac_address,
+                                    'status': device.status,
+                                    'blocked': device.blocked,
+                                    'last_seen': datetime.utcnow().isoformat()
+                                }
+                                socketio.emit('device_updated', device_data)
+                        except Exception as e:
+                            logging.error(f"Error checking device {device.ip_address}: {e}")
                             continue
 
                     db.session.commit()

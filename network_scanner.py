@@ -8,6 +8,10 @@ import threading
 import time
 import os
 
+def is_cloud_environment():
+    """Check if running in cloud environment"""
+    return os.environ.get('REPL_ID') is not None or os.environ.get('CLOUD_ENVIRONMENT') is not None
+
 def get_network_interfaces():
     """Get all active network interfaces."""
     interfaces = []
@@ -64,6 +68,10 @@ def get_device_name(ip):
 
 def scan_network():
     """Scan network for devices using socket-based scanning."""
+    if is_cloud_environment():
+        logging.warning("Network scanning is disabled in cloud environment")
+        return generate_demo_devices()
+
     devices = []
     try:
         network_cidr = get_ip_network()
@@ -143,9 +151,48 @@ def scan_network():
         logging.error(f"Error in scan_network: {str(e)}")
         return devices
 
+def generate_demo_devices():
+    """Generate demo devices for cloud environment"""
+    logging.info("Generating demo devices for cloud environment")
+    demo_devices = [
+        {
+            'ip_address': '192.168.1.100',
+            'mac_address': '00:1A:2B:3C:4D:5E',
+            'name': 'Demo-Laptop',
+            'status': True,
+            'blocked': False,
+            'last_seen': datetime.utcnow()
+        },
+        {
+            'ip_address': '192.168.1.101',
+            'mac_address': '00:2B:3C:4D:5E:6F',
+            'name': 'Demo-Phone',
+            'status': True,
+            'blocked': False,
+            'last_seen': datetime.utcnow()
+        },
+        {
+            'ip_address': '192.168.1.102',
+            'mac_address': '00:3C:4D:5E:6F:7G',
+            'name': 'Demo-TV',
+            'status': False,
+            'blocked': True,
+            'last_seen': datetime.utcnow()
+        }
+    ]
+    return demo_devices
+
 def get_total_network_usage():
     """Get total network usage for all interfaces."""
     try:
+        if is_cloud_environment():
+            # Return demo data for cloud environment
+            return {
+                'timestamp': datetime.utcnow(),
+                'bytes_sent': 1024 * 1024 * 100,  # 100 MB sent
+                'bytes_recv': 1024 * 1024 * 200   # 200 MB received
+            }
+
         io_counters = psutil.net_io_counters()
         return {
             'timestamp': datetime.utcnow(),

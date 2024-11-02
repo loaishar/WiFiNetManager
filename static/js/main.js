@@ -1,3 +1,9 @@
+// Define fetchWithAuth function
+function fetchWithAuth(url, options = {}) {
+    options.credentials = 'include';  // Include cookies in the request
+    return fetch(url, options);
+}
+
 document.addEventListener('DOMContentLoaded', function() {
     console.log('DOM Content Loaded');
     
@@ -11,16 +17,18 @@ document.addEventListener('DOMContentLoaded', function() {
             
             console.log('Starting network scan...');
             
-            const resetButton = () => {
-                button.disabled = false;
-                button.innerHTML = originalText;
-            };
-
             fetchWithAuth('/api/scan', { 
                 method: 'POST',
-                timeout: 10000 // 10 second timeout
+                headers: {
+                    'Content-Type': 'application/json',
+                },
             })
-            .then(response => response.json())
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Network response was not ok');
+                }
+                return response.json();
+            })
             .then(data => {
                 console.log('Scan response:', data);
                 if (data.success) {
@@ -44,7 +52,8 @@ document.addEventListener('DOMContentLoaded', function() {
             })
             .finally(() => {
                 console.log('Scan completed');
-                resetButton();
+                button.disabled = false;
+                button.innerHTML = originalText;
             });
         });
     }
@@ -61,20 +70,30 @@ document.addEventListener('DOMContentLoaded', function() {
             const deviceId = e.target.dataset.deviceId;
             e.target.disabled = true;
             
-            fetchWithAuth(`/api/devices/${deviceId}/toggle`, { method: 'POST' })
-                .then(response => response.json())
-                .then(data => {
-                    if (!data.success) {
-                        throw new Error('Failed to toggle device');
-                    }
-                })
-                .catch(error => {
-                    console.error('Error:', error);
-                    alert('Error toggling device. Please try again.');
-                })
-                .finally(() => {
-                    e.target.disabled = false;
-                });
+            fetchWithAuth(`/api/devices/${deviceId}/toggle`, { 
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                }
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Network response was not ok');
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (!data.success) {
+                    throw new Error('Failed to toggle device');
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Error toggling device. Please try again.');
+            })
+            .finally(() => {
+                e.target.disabled = false;
+            });
         }
     });
 

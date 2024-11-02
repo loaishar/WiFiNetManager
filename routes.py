@@ -190,52 +190,58 @@ def toggle_device(device_id):
 @main.route('/api/scan', methods=['POST'])
 @jwt_required()
 def scan():
-    current_user = get_jwt_identity()
-    logging.info(f"User {current_user} scanning for new devices")
     try:
-        new_devices = scan_network()
-        logging.debug(f"Scan returned {len(new_devices)} devices")
-        for device_data in new_devices:
-            existing_device = Device.query.filter_by(mac_address=device_data['mac_address']).first()
-            if existing_device:
-                logging.debug(f"Updating existing device: {device_data['name']}")
-                existing_device.name = device_data['name']
-                existing_device.ip_address = device_data['ip_address']
-                existing_device.status = device_data['status']
-                existing_device.last_seen = device_data['last_seen']
+        logging.info("Starting device scan")
+        devices = scan_network()
+        
+        if not devices:
+            logging.warning("No devices found during scan")
+            return jsonify({
+                'success': False,
+                'message': 'No devices found. This might be due to insufficient permissions or network configuration.'
+            }), 404
+
+        # Update database with found devices
+        for device in devices:
+            existing = Device.query.filter_by(mac_address=device['mac_address']).first()
+            if existing:
+                existing.ip_address = device['ip_address']
+                existing.name = device['name']
+                existing.status = device['status']
+                existing.last_seen = device['last_seen']
             else:
-                logging.debug(f"Adding new device: {device_data['name']}")
-                new_device = Device(
-                    name=device_data['name'],
-                    ip_address=device_data['ip_address'],
-                    mac_address=device_data['mac_address'],
-                    status=device_data['status'],
-                    blocked=device_data['blocked'],
-                    last_seen=device_data['last_seen']
-                )
+                new_device = Device(**device)
                 db.session.add(new_device)
         
         db.session.commit()
+        logging.info(f"Successfully added/updated {len(devices)} devices")
         
-        devices = Device.query.all()
+        # Get updated device list
+        all_devices = Device.query.all()
         devices_data = [{
-            'id': device.id,
-            'name': device.name,
-            'ip_address': device.ip_address,
-            'mac_address': device.mac_address,
-            'status': device.status,
-            'blocked': device.blocked,
-            'last_seen': device.last_seen.isoformat() if device.last_seen else None
-        } for device in devices]
+            'id': d.id,
+            'name': d.name,
+            'ip_address': d.ip_address,
+            'mac_address': d.mac_address,
+            'status': d.status,
+            'blocked': d.blocked,
+            'last_seen': d.last_seen.isoformat() if d.last_seen else None
+        } for d in all_devices]
+
+        # Emit update to all clients
+        socketio.emit('devices_update', devices_data)
         
-        emit('devices_update', devices_data, broadcast=True, namespace='/')
-        logging.info(f"Emitted 'devices_update' event with {len(devices)} devices")
-        
-        return jsonify({'success': True})
+        return jsonify({
+            'success': True,
+            'devices': devices_data
+        })
     except Exception as e:
         logging.error(f"Error during device scan: {str(e)}")
         db.session.rollback()
-        return jsonify({'error': 'Internal server error'}), 500
+        return jsonify({
+            'success': False,
+            'message': 'Error during device scan. Check server logs for details.'
+        }), 500
 
 @main.route('/network_usage')
 @jwt_required()
@@ -309,9 +315,9 @@ def get_network_usage():
 
         response_data = {
             'labels': [entry.interval.isoformat() for entry in usage_data],
-            'values': [float(entry.usage or 0) / (1024 * 1024) for entry in usage_data],  # Convert to MB
+            'values': [float(entry.usage or 0) / (1024 * 1024) for entry in usage_data],
             'statistics': {
-                'total_usage': float(total_usage) / (1024 * 1024),  # Convert to MB
+                'total_usage': float(total_usage) / (1024 * 1024),
                 'peak_usage_time': peak_time.strftime('%Y-%m-%d %H:%M') if peak_time else None,
                 'trend': trend
             }

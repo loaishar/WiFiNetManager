@@ -8,6 +8,7 @@ import threading
 import time
 import scapy.all as scapy
 from scapy.layers.l2 import ARP, Ether
+import os
 
 def get_network_interfaces():
     """Get all active network interfaces."""
@@ -59,40 +60,20 @@ def get_device_name(ip):
     return f"Device-{ip.split('.')[-1]}"
 
 def get_total_network_usage():
-    """Get total network usage across all interfaces."""
+    """Get total network usage for all interfaces."""
     try:
-        total_bytes_sent = 0
-        total_bytes_recv = 0
-        active_interfaces = {}
-
-        # Get interface statistics
-        for iface, stats in psutil.net_io_counters(pernic=True).items():
-            if not iface.startswith(('lo', 'docker', 'veth', 'br-')):
-                total_bytes_sent += stats.bytes_sent
-                total_bytes_recv += stats.bytes_recv
-                active_interfaces[iface] = {
-                    'bytes_sent': stats.bytes_sent,
-                    'bytes_recv': stats.bytes_recv,
-                    'packets_sent': stats.packets_sent,
-                    'packets_recv': stats.packets_recv,
-                    'errin': stats.errin,
-                    'errout': stats.errout,
-                    'dropin': stats.dropin,
-                    'dropout': stats.dropout
-                }
-
+        io_counters = psutil.net_io_counters()
         return {
             'timestamp': datetime.utcnow(),
-            'bytes_sent': total_bytes_sent,
-            'bytes_recv': total_bytes_recv,
-            'interfaces': active_interfaces
+            'bytes_sent': io_counters.bytes_sent,
+            'bytes_recv': io_counters.bytes_recv
         }
     except Exception as e:
         logging.error(f"Error getting total network usage: {str(e)}")
         return None
 
 def scan_network():
-    """Perform network scan with improved error handling and retry logic."""
+    """Scan the network for devices with improved error handling."""
     devices = []
     try:
         network_cidr = get_ip_network()
@@ -100,58 +81,40 @@ def scan_network():
             logging.error("Could not determine network CIDR")
             return devices
 
-        logging.info(f"Scanning network: {network_cidr}")
+        logging.info(f"Starting network scan on {network_cidr}")
         
-        # Create ARP request packet
-        arp_request = scapy.ARP(pdst=network_cidr)
-        broadcast = scapy.Ether(dst="ff:ff:ff:ff:ff:ff")
-        arp_request_broadcast = broadcast/arp_request
+        # Run scapy with sudo if needed
+        if os.geteuid() != 0:
+            logging.warning("Scanning may require elevated privileges")
         
-        # Send ARP request with retry logic
-        max_retries = 3
-        answered_list = None
-        
-        for attempt in range(max_retries):
-            try:
-                # Set shorter timeout and retry if needed
-                answered_list = scapy.srp(arp_request_broadcast, timeout=2, verbose=False, retry=1)[0]
-                if answered_list:
-                    break
-            except Exception as e:
-                if attempt == max_retries - 1:
-                    logging.error(f"Failed to scan network after {max_retries} attempts: {str(e)}")
-                    return devices
-                logging.warning(f"Retry {attempt + 1}/{max_retries} after error: {str(e)}")
-                time.sleep(1)
-        
-        if not answered_list:
-            logging.warning("No devices responded to ARP scan")
+        # Create and send ARP request
+        arp = ARP(pdst=network_cidr)
+        ether = Ether(dst="ff:ff:ff:ff:ff:ff")
+        packet = ether/arp
+
+        try:
+            result = scapy.srp(packet, timeout=3, verbose=True)[0]
+        except Exception as e:
+            logging.error(f"Error during ARP scan: {str(e)}")
             return devices
-        
-        # Process responses
-        for element in answered_list:
-            ip_address = element[1].psrc
-            mac_address = element[1].hwsrc
-            
-            # Skip localhost and invalid addresses
-            if ip_address.startswith('127.') or ip_address.startswith('0.'):
-                continue
-                
+
+        # Process discovered devices
+        for sent, received in result:
             device = {
-                'ip_address': ip_address,
-                'mac_address': mac_address,
-                'name': get_device_name(ip_address),
+                'ip_address': received.psrc,
+                'mac_address': received.hwsrc,
+                'name': get_device_name(received.psrc),
                 'status': True,
                 'blocked': False,
                 'last_seen': datetime.utcnow()
             }
             devices.append(device)
-            logging.debug(f"Found device: {device['name']} ({device['ip_address']})")
-            
+            logging.info(f"Found device: {device['name']} ({device['ip_address']})")
+
+        return devices
     except Exception as e:
-        logging.error(f"Error during network scan: {str(e)}")
-    
-    return devices
+        logging.error(f"Error in scan_network: {str(e)}")
+        return devices
 
 def start_total_usage_monitoring():
     """Start background thread to monitor total network usage."""

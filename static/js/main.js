@@ -4,34 +4,48 @@ document.addEventListener('DOMContentLoaded', function() {
     const scanButton = document.getElementById('scan-button');
     if (scanButton) {
         scanButton.addEventListener('click', function() {
-            this.disabled = true;
-            const originalText = this.innerHTML;
-            this.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Scanning...';
+            const button = this;
+            const originalText = button.innerHTML;
+            button.disabled = true;
+            button.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Scanning...';
             
-            fetchWithAuth('/api/scan', { method: 'POST' })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.success) {
-                        if (data.devices && data.devices.length > 0) {
-                            refreshDeviceList(data.devices);
-                        } else {
-                            document.getElementById('device-list').innerHTML = 
-                                '<tr><td colspan="6">No devices found on the network. Please check your network connection.</td></tr>';
-                        }
+            console.log('Starting network scan...');
+            
+            const resetButton = () => {
+                button.disabled = false;
+                button.innerHTML = originalText;
+            };
+
+            fetchWithAuth('/api/scan', { 
+                method: 'POST',
+                timeout: 10000 // 10 second timeout
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log('Scan response:', data);
+                if (data.success) {
+                    if (data.devices && data.devices.length > 0) {
+                        console.log(`Found ${data.devices.length} devices`);
+                        refreshDeviceList(data.devices);
                     } else {
-                        throw new Error(data.message || 'Error scanning for devices');
+                        console.log('No devices found');
+                        document.getElementById('device-list').innerHTML = 
+                            '<tr><td colspan="6">No devices found on the network. Please check your network connection.</td></tr>';
                     }
-                })
-                .catch(error => {
-                    console.error('Error:', error);
-                    alert(error.message || 'Error scanning for devices. Please try again.');
-                    document.getElementById('device-list').innerHTML = 
-                        '<tr><td colspan="6">Error scanning for devices. Please try again.</td></tr>';
-                })
-                .finally(() => {
-                    this.disabled = false;
-                    this.innerHTML = originalText;
-                });
+                } else {
+                    throw new Error(data.message || 'Error scanning for devices');
+                }
+            })
+            .catch(error => {
+                console.error('Scan error:', error);
+                alert(error.message || 'Error scanning for devices. Please try again.');
+                document.getElementById('device-list').innerHTML = 
+                    '<tr><td colspan="6">Error scanning for devices. Please try again.</td></tr>';
+            })
+            .finally(() => {
+                console.log('Scan completed');
+                resetButton();
+            });
         });
     }
 

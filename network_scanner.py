@@ -22,6 +22,7 @@ def get_network_interfaces():
                     # Skip loopback and virtual interfaces
                     if not iface.startswith(('lo', 'docker', 'veth', 'br-')):
                         interfaces.append(iface)
+                        logging.debug(f"Found active interface: {iface}")
         return interfaces
     except Exception as e:
         logging.error(f"Error getting network interfaces: {str(e)}")
@@ -39,9 +40,12 @@ def get_ip_network():
                     if not ip.startswith('127.'):
                         try:
                             network = ipaddress.IPv4Network(f"{ip}/{netmask}", strict=False)
+                            logging.info(f"Determined network CIDR: {str(network)} for interface {iface}")
                             return str(network)
-                        except ValueError:
+                        except ValueError as e:
+                            logging.warning(f"Invalid network for interface {iface}: {str(e)}")
                             continue
+        logging.error("No valid network CIDR found")
         return None
     except Exception as e:
         logging.error(f"Error getting IP network: {str(e)}")
@@ -52,6 +56,7 @@ def get_device_name(ip):
     try:
         hostname = socket.gethostbyaddr(ip)[0]
         if hostname and not hostname.startswith('_'):
+            logging.debug(f"Resolved hostname for {ip}: {hostname}")
             return hostname
     except (socket.herror, socket.gaierror) as e:
         logging.debug(f"Could not resolve hostname for {ip}: {str(e)}")
@@ -59,20 +64,8 @@ def get_device_name(ip):
         logging.error(f"Error getting device name for {ip}: {str(e)}")
     return f"Device-{ip.split('.')[-1]}"
 
-def get_total_network_usage():
-    """Get total network usage for all interfaces."""
-    try:
-        io_counters = psutil.net_io_counters()
-        return {
-            'timestamp': datetime.utcnow(),
-            'bytes_sent': io_counters.bytes_sent,
-            'bytes_recv': io_counters.bytes_recv
-        }
-    except Exception as e:
-        logging.error(f"Error getting total network usage: {str(e)}")
-        return None
-
 def scan_network():
+    """Scan network for devices with improved logging and error handling."""
     devices = []
     try:
         network_cidr = get_ip_network()
@@ -82,14 +75,16 @@ def scan_network():
 
         logging.info(f"Starting network scan on {network_cidr}")
         
-        # Create and send ARP request
+        # Create and send ARP request with explicit timeout
         arp = ARP(pdst=network_cidr)
         ether = Ether(dst="ff:ff:ff:ff:ff:ff")
         packet = ether/arp
 
-        result = scapy.srp(packet, timeout=3, verbose=False)[0]
+        logging.info("Sending ARP requests...")
+        result = scapy.srp(packet, timeout=1, verbose=True, retry=2)[0]
+        
         if not result:
-            logging.warning("No response received from ARP scan")
+            logging.warning("No devices responded to ARP scan")
             return devices
 
         for sent, received in result:
@@ -104,10 +99,24 @@ def scan_network():
             devices.append(device)
             logging.info(f"Found device: {device['name']} ({device['ip_address']})")
 
+        logging.info(f"Scan completed. Found {len(devices)} devices")
         return devices
     except Exception as e:
         logging.error(f"Error in scan_network: {str(e)}")
         return devices
+
+def get_total_network_usage():
+    """Get total network usage for all interfaces."""
+    try:
+        io_counters = psutil.net_io_counters()
+        return {
+            'timestamp': datetime.utcnow(),
+            'bytes_sent': io_counters.bytes_sent,
+            'bytes_recv': io_counters.bytes_recv
+        }
+    except Exception as e:
+        logging.error(f"Error getting total network usage: {str(e)}")
+        return None
 
 def start_total_usage_monitoring():
     """Start background thread to monitor total network usage."""

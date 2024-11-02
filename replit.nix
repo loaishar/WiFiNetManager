@@ -1,5 +1,6 @@
 {pkgs}: {
   deps = [
+    pkgs.libpcap
     pkgs.wireshark
     pkgs.tcpdump
     pkgs.sox

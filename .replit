@@ -47,7 +47,7 @@ task = "packager.installForAll"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "flask db migrate -m 'Add TotalNetworkUsage model' && flask db upgrade"
+args = "flask db upgrade"
 
 [[workflows.workflow]]
 name = "Flask Server"

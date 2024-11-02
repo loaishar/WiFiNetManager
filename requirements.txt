@@ -10,3 +10,4 @@ netifaces
 psutil
 scapy
 ipaddress
+eventlet

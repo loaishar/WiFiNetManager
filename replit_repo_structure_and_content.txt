@@ -23,21 +23,6 @@ cors = CORS()
 
 --------------------------------------------------
 
-File: ./main.py
---------------------------------------------------
-Contents of ./main.py:
-import os
-from app import create_app
-from extensions import socketio
-
-app = create_app()
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    socketio.run(app, host="0.0.0.0", port=port, debug=True)
-
---------------------------------------------------
-
 File: ./app.py
 --------------------------------------------------
 Contents of ./app.py:
@@ -118,292 +103,71 @@ def create_app():
 
 --------------------------------------------------
 
-File: ./models.py
+File: ./generate_structure.py
 --------------------------------------------------
-Contents of ./models.py:
-from extensions import db
-from werkzeug.security import generate_password_hash, check_password_hash
-from datetime import datetime
-import logging
+Contents of ./generate_structure.py:
+import os
 
-class User(db.Model):
-    __tablename__ = 'users'
-    id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(64), unique=True, nullable=False)
-    email = db.Column(db.String(120), unique=True, nullable=False)
-    password_hash = db.Column(db.String(256))
-    is_admin = db.Column(db.Boolean, default=False, nullable=False)
+# Output file
+OUTPUT_FILE = "replit_repo_structure_and_content.txt"
 
-    def set_password(self, password):
-        self.password_hash = generate_password_hash(password)
+# Folders and files to include (based on your screenshot)
+INCLUDED_ITEMS = {
+    "app.py", "extensions.py", "generate_structure.py", "generated-icon.png",
+    "main.py", "models.py", "network_scanner.py", "routes.py", "static",
+    "templates"
+}
 
-    def check_password(self, password):
-        return check_password_hash(self.password_hash, password)
 
-class Device(db.Model):
-    __tablename__ = 'devices'
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(128), nullable=False)
-    ip_address = db.Column(db.String(45), nullable=False, index=True)
-    mac_address = db.Column(db.String(17), unique=True, nullable=False, index=True)
-    status = db.Column(db.Boolean, default=True)
-    blocked = db.Column(db.Boolean, default=False)
-    last_seen = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    data_usage = db.Column(db.BigInteger, default=0)  # Total data usage in bytes
-    last_usage_update = db.Column(db.DateTime, default=datetime.utcnow)
-    bandwidth_limit = db.Column(db.Integer, default=0)  # Bandwidth limit in Mbps (0 = unlimited)
-    notes = db.Column(db.Text, nullable=True)  # Admin notes about the device
+# Function to write repo structure and file contents
+def write_repo_structure():
+    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+        f.write("Replit Repository Structure and File Contents:\n")
+        f.write("=" * 50 + "\n\n")
 
-    def update_data_usage(self, bytes_used):
-        """Update device data usage with actual network statistics."""
-        try:
-            if not isinstance(bytes_used, (int, float)) or bytes_used < 0:
-                logging.error(f"Invalid bytes_used value for device {self.name}: {bytes_used}")
-                return
+        # Walk through the directory tree
+        for root, dirs, files in os.walk("."):
+            # Remove the .git directory from the walk
+            dirs[:] = [d for d in dirs if d != ".git"]
+            # Only include folders and files that match the specified items or subdirectories like 'css' and 'js'
+            dirs[:] = [
+                d for d in dirs if d in INCLUDED_ITEMS or d in {"css", "js"}
+            ]  # Include css, js subdirectories
+            files = [
+                file for file in files
+                if file.endswith(('.py', '.html', '.css', '.js',
+                                  '.png')) and file != "list_users.py"
+            ]  # Exclude list_users.py
 
-            # Calculate the difference since last update
-            if self.data_usage is None:
-                self.data_usage = 0
-            
-            # Only update if we have new data
-            if bytes_used > self.data_usage:
-                new_bytes = bytes_used - self.data_usage
-                self.data_usage = bytes_used
-                self.last_usage_update = datetime.utcnow()
-                
-                # Record the usage increment
-                new_usage = NetworkUsage(
-                    device_id=self.id,
-                    data_used=new_bytes,
-                    timestamp=datetime.utcnow()
-                )
-                db.session.add(new_usage)
-                logging.debug(f"Updated data usage for device {self.name}: +{new_bytes} bytes")
-        except Exception as e:
-            logging.error(f"Error updating data usage for device {self.name}: {str(e)}")
-            db.session.rollback()
+            # Write the current directory if it's in the included items
+            if os.path.basename(root) in INCLUDED_ITEMS or root == ".":
+                f.write(f"Directory: {root}/\n")
+                f.write("-" * 50 + "\n")
 
-    def get_hourly_usage(self):
-        """Get hourly network usage statistics for the device."""
-        try:
-            hourly_usage = db.session.query(
-                db.func.date_trunc('hour', NetworkUsage.timestamp).label('hour'),
-                db.func.sum(NetworkUsage.data_used).label('total_usage')
-            ).filter(NetworkUsage.device_id == self.id)\
-             .group_by('hour')\
-             .order_by('hour')\
-             .all()
-            return [(usage.hour, usage.total_usage) for usage in hourly_usage]
-        except Exception as e:
-            logging.error(f"Error getting hourly usage for device {self.name}: {str(e)}")
-            return []
+            # Write each file in the current directory
+            for file in files:
+                file_path = os.path.join(root, file)
+                f.write(f"File: {file_path}\n")
+                f.write("-" * 50 + "\n")
 
-class NetworkUsage(db.Model):
-    __tablename__ = 'network_usage'
-    id = db.Column(db.Integer, primary_key=True)
-    device_id = db.Column(db.Integer, db.ForeignKey('devices.id'), nullable=False)
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
-    data_used = db.Column(db.BigInteger)  # Data used in bytes
+                try:
+                    # Read the contents of the file
+                    with open(file_path, "r",
+                              encoding="utf-8") as content_file:
+                        content = content_file.read()
+                        f.write(f"Contents of {file_path}:\n")
+                        f.write(content + "\n")
+                except Exception as e:
+                    f.write(f"Could not read file: {file_path}. Error: {e}\n")
 
-    device = db.relationship('Device', backref=db.backref('usage_history', lazy='dynamic'))
+                f.write("-" * 50 + "\n\n")
 
-class TotalNetworkUsage(db.Model):
-    __tablename__ = 'total_network_usage'
-    id = db.Column(db.Integer, primary_key=True)
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
-    bytes_sent = db.Column(db.BigInteger)
-    bytes_recv = db.Column(db.BigInteger)
 
-class NetworkSettings(db.Model):
-    __tablename__ = 'network_settings'
-    id = db.Column(db.Integer, primary_key=True)
-    setting_name = db.Column(db.String(64), unique=True, nullable=False)
-    setting_value = db.Column(db.String(256))
-    description = db.Column(db.Text)
-    last_modified = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    modified_by = db.Column(db.Integer, db.ForeignKey('users.id'))
-
---------------------------------------------------
-
-File: ./network_scanner.py
---------------------------------------------------
-Contents of ./network_scanner.py:
-import psutil
-import netifaces
-import scapy.all as scapy
-import logging
-import ipaddress
-from datetime import datetime
-import socket
-import threading
-import time
-
-def get_network_interfaces():
-    """Get all active network interfaces."""
-    interfaces = []
-    try:
-        for iface in netifaces.interfaces():
-            addrs = netifaces.ifaddresses(iface)
-            if netifaces.AF_INET in addrs:  # Has IPv4
-                stats = psutil.net_io_counters(pernic=True).get(iface)
-                if stats and (stats.bytes_sent > 0 or stats.bytes_recv > 0):
-                    interfaces.append(iface)
-        return interfaces
-    except Exception as e:
-        logging.error(f"Error getting network interfaces: {str(e)}")
-        return []
-
-def get_ip_network():
-    """Get the current network's IP range in CIDR notation."""
-    try:
-        for iface in get_network_interfaces():
-            addrs = netifaces.ifaddresses(iface)
-            if netifaces.AF_INET in addrs:
-                for addr in addrs[netifaces.AF_INET]:
-                    ip = addr['addr']
-                    netmask = addr['netmask']
-                    if not ip.startswith('127.'):
-                        network = ipaddress.IPv4Network(f"{ip}/{netmask}", strict=False)
-                        return str(network)
-        return None
-    except Exception as e:
-        logging.error(f"Error getting IP network: {str(e)}")
-        return None
-
-def get_device_name(ip):
-    """Try to get device hostname with improved error handling."""
-    try:
-        hostname = socket.gethostbyaddr(ip)[0]
-        if hostname and not hostname.startswith('_'):
-            return hostname
-    except (socket.herror, socket.gaierror) as e:
-        logging.debug(f"Could not resolve hostname for {ip}: {str(e)}")
-    except Exception as e:
-        logging.error(f"Error getting device name for {ip}: {str(e)}")
-    
-    return f"Device-{ip.split('.')[-1]}"
-
-def get_device_usage(mac_address):
-    """Get device-specific network usage based on MAC address."""
-    try:
-        total_bytes_sent = 0
-        total_bytes_recv = 0
-        
-        for interface in get_network_interfaces():
-            # Get interface MAC address
-            if_mac = netifaces.ifaddresses(interface).get(netifaces.AF_LINK, [{}])[0].get('addr')
-            if if_mac and if_mac.lower() == mac_address.lower():
-                stats = psutil.net_io_counters(pernic=True).get(interface)
-                if stats:
-                    total_bytes_sent += stats.bytes_sent
-                    total_bytes_recv += stats.bytes_recv
-        
-        return total_bytes_sent + total_bytes_recv
-    except Exception as e:
-        logging.error(f"Error getting device usage for {mac_address}: {str(e)}")
-        return 0
-
-def get_total_network_usage():
-    """Get total network usage for all interfaces."""
-    try:
-        interfaces = get_network_interfaces()
-        total_bytes_sent = 0
-        total_bytes_recv = 0
-        
-        for interface in interfaces:
-            io_counters = psutil.net_io_counters(pernic=True)
-            if interface in io_counters:
-                stats = io_counters[interface]
-                total_bytes_sent += stats.bytes_sent
-                total_bytes_recv += stats.bytes_recv
-        
-        return {
-            'timestamp': datetime.utcnow(),
-            'bytes_sent': total_bytes_sent,
-            'bytes_recv': total_bytes_recv
-        }
-    except Exception as e:
-        logging.error(f"Error getting total network usage: {str(e)}")
-        return None
-
-def arp_scan(ip_range):
-    """Perform ARP scan to discover devices with improved error handling."""
-    devices = []
-    try:
-        if not ip_range:
-            logging.error("No valid IP range provided for ARP scan")
-            return devices
-
-        arp_request = scapy.ARP(pdst=ip_range)
-        broadcast = scapy.Ether(dst="ff:ff:ff:ff:ff:ff")
-        arp_request_broadcast = broadcast/arp_request
-        
-        answered_list = scapy.srp(arp_request_broadcast, timeout=3, verbose=False)[0]
-        
-        for element in answered_list:
-            ip_address = element[1].psrc
-            mac_address = element[1].hwsrc
-            
-            device = {
-                'ip_address': ip_address,
-                'mac_address': mac_address,
-                'name': get_device_name(ip_address),
-                'status': True,
-                'blocked': False,
-                'last_seen': datetime.utcnow(),
-                'data_usage': get_device_usage(mac_address)
-            }
-            devices.append(device)
-            logging.debug(f"Found device: {device['name']} ({device['ip_address']})")
-    except Exception as e:
-        logging.error(f"Error during ARP scan: {str(e)}")
-    return devices
-
-def scan_network():
-    """Scan network and return list of devices."""
-    logging.info("Starting network scan")
-    ip_range = get_ip_network()
-    
-    if not ip_range:
-        logging.error("Could not determine network range")
-        return []
-    
-    devices = arp_scan(ip_range)
-    logging.info(f"Found {len(devices)} devices")
-    return devices
-
-def start_total_usage_monitoring():
-    """Start background thread to monitor total network usage."""
-    from flask import current_app
-    app = current_app._get_current_object()
-    
-    def monitor():
-        logging.info("Starting network usage monitoring")
-        while True:
-            try:
-                with app.app_context():
-                    from extensions import db
-                    from models import TotalNetworkUsage
-                    
-                    usage = get_total_network_usage()
-                    if usage:
-                        total_usage = TotalNetworkUsage(
-                            timestamp=usage['timestamp'],
-                            bytes_sent=usage['bytes_sent'],
-                            bytes_recv=usage['bytes_recv']
-                        )
-                        db.session.add(total_usage)
-                        db.session.commit()
-                        logging.debug(f"Recorded network usage: sent={usage['bytes_sent']}, recv={usage['bytes_recv']}")
-            except Exception as e:
-                logging.error(f"Error in network monitoring: {str(e)}")
-                if 'db' in locals():
-                    db.session.rollback()
-            time.sleep(60)  # Update every minute
-    
-    monitor_thread = threading.Thread(target=monitor, daemon=True)
-    monitor_thread.start()
-    logging.info("Network usage monitoring thread started")
+# Execute the function to document the current repo
+if __name__ == "__main__":
+    write_repo_structure()
+    print(
+        f"Repository structure and content have been written to {OUTPUT_FILE}")
 
 --------------------------------------------------
 
@@ -417,8 +181,8 @@ from flask_jwt_extended import (
     verify_jwt_in_request
 )
 from extensions import db, jwt, socketio
-from models import User, Device, NetworkUsage, NetworkSettings
-from network_scanner import scan_network
+from models import User, Device, NetworkUsage, NetworkSettings, TotalNetworkUsage
+from network_scanner import scan_network, get_total_network_usage
 import logging
 from datetime import datetime, timedelta
 from flask_socketio import emit
@@ -565,8 +329,7 @@ def get_devices():
             'mac_address': device.mac_address,
             'status': device.status,
             'blocked': device.blocked,
-            'last_seen': device.last_seen.isoformat() if device.last_seen else None,
-            'data_usage': device.data_usage
+            'last_seen': device.last_seen.isoformat() if device.last_seen else None
         } for device in devices])
     except Exception as e:
         logging.error(f"Error fetching devices: {str(e)}")
@@ -589,8 +352,7 @@ def toggle_device(device_id):
             'mac_address': device.mac_address,
             'status': device.status,
             'blocked': device.blocked,
-            'last_seen': device.last_seen.isoformat() if device.last_seen else None,
-            'data_usage': device.data_usage
+            'last_seen': device.last_seen.isoformat() if device.last_seen else None
         }
         
         emit('device_updated', device_data, broadcast=True, namespace='/')
@@ -617,8 +379,6 @@ def scan():
                 existing_device.ip_address = device_data['ip_address']
                 existing_device.status = device_data['status']
                 existing_device.last_seen = device_data['last_seen']
-                if 'data_usage' in device_data:
-                    existing_device.update_data_usage(device_data['data_usage'])
             else:
                 logging.debug(f"Adding new device: {device_data['name']}")
                 new_device = Device(
@@ -629,8 +389,6 @@ def scan():
                     blocked=device_data['blocked'],
                     last_seen=device_data['last_seen']
                 )
-                if 'data_usage' in device_data:
-                    new_device.data_usage = device_data['data_usage']
                 db.session.add(new_device)
         
         db.session.commit()
@@ -643,8 +401,7 @@ def scan():
             'mac_address': device.mac_address,
             'status': device.status,
             'blocked': device.blocked,
-            'last_seen': device.last_seen.isoformat() if device.last_seen else None,
-            'data_usage': device.data_usage
+            'last_seen': device.last_seen.isoformat() if device.last_seen else None
         } for device in devices]
         
         emit('devices_update', devices_data, broadcast=True, namespace='/')
@@ -663,30 +420,27 @@ def network_usage():
         current_user = get_jwt_identity()
         logging.info(f"User {current_user} accessing network usage page")
         
-        devices = Device.query.all()
-        
-        for device in devices:
-            device.total_usage = db.session.query(func.sum(NetworkUsage.data_used)).filter(NetworkUsage.device_id == device.id).scalar() or 0
-        
-        total_network_usage = sum(device.total_usage for device in devices)
-        
         end_time = datetime.utcnow()
         start_time = end_time - timedelta(days=1)
+        
+        total_usage = db.session.query(
+            func.sum(TotalNetworkUsage.bytes_sent + TotalNetworkUsage.bytes_recv)
+        ).filter(
+            TotalNetworkUsage.timestamp.between(start_time, end_time)
+        ).scalar() or 0
+        
         hourly_usage = db.session.query(
-            func.date_trunc('hour', NetworkUsage.timestamp).label('hour'),
-            func.sum(NetworkUsage.data_used).label('usage')
-        ).filter(NetworkUsage.timestamp.between(start_time, end_time)
+            func.date_trunc('hour', TotalNetworkUsage.timestamp).label('hour'),
+            func.sum(TotalNetworkUsage.bytes_sent + TotalNetworkUsage.bytes_recv).label('usage')
+        ).filter(
+            TotalNetworkUsage.timestamp.between(start_time, end_time)
         ).group_by('hour').order_by('hour').all()
         
         hourly_data = [{'hour': entry.hour.isoformat(), 'usage': entry.usage} for entry in hourly_usage]
         
-        top_devices = sorted(devices, key=lambda x: x.total_usage, reverse=True)[:5]
-        
         return render_template('network_usage.html',
-                             devices=devices,
-                             total_network_usage=total_network_usage,
-                             hourly_data=hourly_data,
-                             top_devices=top_devices)
+                             total_network_usage=total_usage,
+                             hourly_data=hourly_data)
     except Exception as e:
         logging.error(f"Error accessing network usage page: {str(e)}")
         return jsonify({'error': 'Internal server error'}), 500
@@ -695,25 +449,24 @@ def network_usage():
 @jwt_required()
 def get_network_usage():
     try:
-        current_user = get_jwt_identity()
         time_range = request.args.get('range', '24h')
-        
         end_time = datetime.utcnow()
+        
         if time_range == '7d':
             start_time = end_time - timedelta(days=7)
             interval = 'hour'
         elif time_range == '30d':
             start_time = end_time - timedelta(days=30)
             interval = 'day'
-        else:
+        else:  # 24h
             start_time = end_time - timedelta(days=1)
             interval = 'hour'
 
         usage_data = db.session.query(
-            func.date_trunc(interval, NetworkUsage.timestamp).label('interval'),
-            func.sum(NetworkUsage.data_used).label('usage')
+            func.date_trunc(interval, TotalNetworkUsage.timestamp).label('interval'),
+            func.sum(TotalNetworkUsage.bytes_sent + TotalNetworkUsage.bytes_recv).label('usage')
         ).filter(
-            NetworkUsage.timestamp.between(start_time, end_time)
+            TotalNetworkUsage.timestamp.between(start_time, end_time)
         ).group_by('interval').order_by('interval').all()
 
         total_usage = sum(entry.usage for entry in usage_data) if usage_data else 0
@@ -730,30 +483,13 @@ def get_network_usage():
         else:
             trend = 0
 
-        devices = Device.query.all()
-        device_usage = []
-        for device in devices:
-            device_data = db.session.query(
-                func.sum(NetworkUsage.data_used).label('total_usage')
-            ).filter(
-                NetworkUsage.device_id == device.id,
-                NetworkUsage.timestamp.between(start_time, end_time)
-            ).first()
-
-            device_usage.append({
-                'name': device.name,
-                'usage': float(device_data.total_usage or 0) / (1024 * 1024)  # Convert to MB
-            })
-
         response_data = {
             'labels': [entry.interval.isoformat() for entry in usage_data],
             'values': [float(entry.usage or 0) / (1024 * 1024) for entry in usage_data],  # Convert to MB
-            'devices': sorted(device_usage, key=lambda x: x['usage'], reverse=True),
             'statistics': {
                 'total_usage': float(total_usage) / (1024 * 1024),  # Convert to MB
                 'peak_usage_time': peak_time.strftime('%Y-%m-%d %H:%M') if peak_time else None,
-                'trend': trend,
-                'period_comparison': 0  # Reset to 0 since we're using real data
+                'trend': trend
             }
         }
 
@@ -770,7 +506,7 @@ def admin_dashboard():
         active_devices = Device.query.filter_by(status=True).count()
         blocked_devices = Device.query.filter_by(blocked=True).count()
         
-        total_usage = db.session.query(func.sum(NetworkUsage.data_used)).scalar() or 0
+        total_usage = db.session.query(func.sum(TotalNetworkUsage.bytes_sent + TotalNetworkUsage.bytes_recv)).scalar() or 0
         
         devices = Device.query.all()
         network_settings = NetworkSettings.query.all()
@@ -854,8 +590,7 @@ def update_device(device_id):
             'blocked': device.blocked,
             'bandwidth_limit': device.bandwidth_limit,
             'notes': device.notes,
-            'last_seen': device.last_seen.isoformat() if device.last_seen else None,
-            'data_usage': device.data_usage
+            'last_seen': device.last_seen.isoformat() if device.last_seen else None
         }
         
         emit('device_updated', device_data, broadcast=True, namespace='/')
@@ -864,74 +599,279 @@ def update_device(device_id):
         logging.error(f"Error updating device: {str(e)}")
         db.session.rollback()
         return jsonify({'error': 'Internal server error'}), 500
+--------------------------------------------------
+
+File: ./models.py
+--------------------------------------------------
+Contents of ./models.py:
+from extensions import db
+from werkzeug.security import generate_password_hash, check_password_hash
+from datetime import datetime
+import logging
+
+class User(db.Model):
+    __tablename__ = 'users'
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(64), unique=True, nullable=False)
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    password_hash = db.Column(db.String(256))
+    is_admin = db.Column(db.Boolean, default=False, nullable=False)
+
+    def set_password(self, password):
+        self.password_hash = generate_password_hash(password)
+
+    def check_password(self, password):
+        return check_password_hash(self.password_hash, password)
+
+class Device(db.Model):
+    __tablename__ = 'devices'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(128), nullable=False)
+    ip_address = db.Column(db.String(45), nullable=False, index=True)
+    mac_address = db.Column(db.String(17), unique=True, nullable=False, index=True)
+    status = db.Column(db.Boolean, default=True)
+    blocked = db.Column(db.Boolean, default=False)
+    last_seen = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    bandwidth_limit = db.Column(db.Integer, default=0)  # Bandwidth limit in Mbps (0 = unlimited)
+    notes = db.Column(db.Text, nullable=True)  # Admin notes about the device
+
+class NetworkUsage(db.Model):
+    __tablename__ = 'network_usage'
+    id = db.Column(db.Integer, primary_key=True)
+    device_id = db.Column(db.Integer, db.ForeignKey('devices.id'), nullable=False)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+    data_used = db.Column(db.BigInteger)  # Data used in bytes
+
+    device = db.relationship('Device', backref=db.backref('usage_history', lazy='dynamic'))
+
+class TotalNetworkUsage(db.Model):
+    __tablename__ = 'total_network_usage'
+    id = db.Column(db.Integer, primary_key=True)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+    bytes_sent = db.Column(db.BigInteger)
+    bytes_recv = db.Column(db.BigInteger)
+
+class NetworkSettings(db.Model):
+    __tablename__ = 'network_settings'
+    id = db.Column(db.Integer, primary_key=True)
+    setting_name = db.Column(db.String(64), unique=True, nullable=False)
+    setting_value = db.Column(db.String(256))
+    description = db.Column(db.Text)
+    last_modified = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    modified_by = db.Column(db.Integer, db.ForeignKey('users.id'))
 
 --------------------------------------------------
 
-File: ./generate_structure.py
+File: ./main.py
 --------------------------------------------------
-Contents of ./generate_structure.py:
-import os
+Contents of ./main.py:
+from app import create_app
+from extensions import socketio
 
-# Output file
-OUTPUT_FILE = "replit_repo_structure_and_content.txt"
+app = create_app()
 
-# Folders and files to include (based on your screenshot)
-INCLUDED_ITEMS = {
-    "app.py", "extensions.py", "generate_structure.py", "generated-icon.png",
-    "main.py", "models.py", "network_scanner.py", "routes.py", "static",
-    "templates"
-}
+if __name__ == '__main__':
+    socketio.run(app, host='0.0.0.0', port=5000, debug=True)
 
+--------------------------------------------------
 
-# Function to write repo structure and file contents
-def write_repo_structure():
-    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-        f.write("Replit Repository Structure and File Contents:\n")
-        f.write("=" * 50 + "\n\n")
+File: ./network_scanner.py
+--------------------------------------------------
+Contents of ./network_scanner.py:
+import psutil
+import netifaces
+import logging
+import ipaddress
+from datetime import datetime
+import socket
+import threading
+import time
+import scapy.all as scapy
 
-        # Walk through the directory tree
-        for root, dirs, files in os.walk("."):
-            # Remove the .git directory from the walk
-            dirs[:] = [d for d in dirs if d != ".git"]
-            # Only include folders and files that match the specified items or subdirectories like 'css' and 'js'
-            dirs[:] = [
-                d for d in dirs if d in INCLUDED_ITEMS or d in {"css", "js"}
-            ]  # Include css, js subdirectories
-            files = [
-                file for file in files
-                if file.endswith(('.py', '.html', '.css', '.js',
-                                  '.png')) and file != "list_users.py"
-            ]  # Exclude list_users.py
+def get_network_interfaces():
+    """Get all active network interfaces."""
+    interfaces = []
+    try:
+        for iface in netifaces.interfaces():
+            addrs = netifaces.ifaddresses(iface)
+            if netifaces.AF_INET in addrs:  # Has IPv4
+                stats = psutil.net_io_counters(pernic=True).get(iface)
+                if stats and (stats.bytes_sent > 0 or stats.bytes_recv > 0):
+                    interfaces.append(iface)
+        return interfaces
+    except Exception as e:
+        logging.error(f"Error getting network interfaces: {str(e)}")
+        return []
 
-            # Write the current directory if it's in the included items
-            if os.path.basename(root) in INCLUDED_ITEMS or root == ".":
-                f.write(f"Directory: {root}/\n")
-                f.write("-" * 50 + "\n")
+def get_ip_network():
+    """Get the current network's IP range in CIDR notation."""
+    try:
+        for iface in get_network_interfaces():
+            addrs = netifaces.ifaddresses(iface)
+            if netifaces.AF_INET in addrs:
+                for addr in addrs[netifaces.AF_INET]:
+                    ip = addr['addr']
+                    netmask = addr['netmask']
+                    if not ip.startswith('127.'):
+                        try:
+                            network = ipaddress.IPv4Network(f"{ip}/{netmask}", strict=False)
+                            return str(network)
+                        except ValueError:
+                            continue
+        return None
+    except Exception as e:
+        logging.error(f"Error getting IP network: {str(e)}")
+        return None
 
-            # Write each file in the current directory
-            for file in files:
-                file_path = os.path.join(root, file)
-                f.write(f"File: {file_path}\n")
-                f.write("-" * 50 + "\n")
+def get_device_name(ip):
+    """Try to get device hostname with improved error handling."""
+    try:
+        hostname = socket.gethostbyaddr(ip)[0]
+        if hostname and not hostname.startswith('_'):
+            return hostname
+    except (socket.herror, socket.gaierror) as e:
+        logging.debug(f"Could not resolve hostname for {ip}: {str(e)}")
+    except Exception as e:
+        logging.error(f"Error getting device name for {ip}: {str(e)}")
+    return f"Device-{ip.split('.')[-1]}"
 
-                try:
-                    # Read the contents of the file
-                    with open(file_path, "r",
-                              encoding="utf-8") as content_file:
-                        content = content_file.read()
-                        f.write(f"Contents of {file_path}:\n")
-                        f.write(content + "\n")
-                except Exception as e:
-                    f.write(f"Could not read file: {file_path}. Error: {e}\n")
+def get_total_network_usage():
+    """Get total network usage across all interfaces."""
+    try:
+        total_bytes_sent = 0
+        total_bytes_recv = 0
+        active_interfaces = {}
 
-                f.write("-" * 50 + "\n\n")
+        # Get interface statistics
+        for iface, stats in psutil.net_io_counters(pernic=True).items():
+            if iface not in ['lo', 'docker0']:  # Exclude loopback and docker interfaces
+                total_bytes_sent += stats.bytes_sent
+                total_bytes_recv += stats.bytes_recv
+                active_interfaces[iface] = {
+                    'bytes_sent': stats.bytes_sent,
+                    'bytes_recv': stats.bytes_recv,
+                    'packets_sent': stats.packets_sent,
+                    'packets_recv': stats.packets_recv,
+                    'errin': stats.errin,
+                    'errout': stats.errout,
+                    'dropin': stats.dropin,
+                    'dropout': stats.dropout
+                }
 
+        return {
+            'timestamp': datetime.utcnow(),
+            'bytes_sent': total_bytes_sent,
+            'bytes_recv': total_bytes_recv,
+            'interfaces': active_interfaces
+        }
+    except Exception as e:
+        logging.error(f"Error getting total network usage: {str(e)}")
+        return None
 
-# Execute the function to document the current repo
-if __name__ == "__main__":
-    write_repo_structure()
-    print(
-        f"Repository structure and content have been written to {OUTPUT_FILE}")
+def scan_network():
+    """Perform network scan with improved error handling and retry logic."""
+    devices = []
+    try:
+        network_cidr = get_ip_network()
+        if not network_cidr:
+            logging.error("Could not determine network CIDR")
+            return devices
+
+        logging.info(f"Scanning network: {network_cidr}")
+        
+        # Create ARP request packet
+        arp_request = scapy.ARP(pdst=network_cidr)
+        broadcast = scapy.Ether(dst="ff:ff:ff:ff:ff:ff")
+        arp_request_broadcast = broadcast/arp_request
+        
+        # Send ARP request with retry logic
+        max_retries = 3
+        answered_list = None
+        
+        for attempt in range(max_retries):
+            try:
+                # Set shorter timeout and retry if needed
+                answered_list = scapy.srp(arp_request_broadcast, timeout=1, verbose=False, retry=2)[0]
+                if answered_list:
+                    break
+            except Exception as e:
+                if attempt == max_retries - 1:
+                    logging.error(f"Failed to scan network after {max_retries} attempts: {str(e)}")
+                    return devices
+                logging.warning(f"Retry {attempt + 1}/{max_retries} after error: {str(e)}")
+                time.sleep(1)
+        
+        if not answered_list:
+            logging.warning("No devices responded to ARP scan")
+            return devices
+        
+        # Process responses
+        for element in answered_list:
+            ip_address = element[1].psrc
+            mac_address = element[1].hwsrc
+            
+            # Skip localhost and invalid addresses
+            if ip_address.startswith('127.') or ip_address.startswith('0.'):
+                continue
+                
+            device = {
+                'ip_address': ip_address,
+                'mac_address': mac_address,
+                'name': get_device_name(ip_address),
+                'status': True,
+                'blocked': False,
+                'last_seen': datetime.utcnow()
+            }
+            devices.append(device)
+            logging.debug(f"Found device: {device['name']} ({device['ip_address']})")
+            
+    except Exception as e:
+        logging.error(f"Error during network scan: {str(e)}")
+    
+    return devices
+
+def start_total_usage_monitoring():
+    """Start background thread to monitor total network usage."""
+    from flask import current_app
+    app = current_app._get_current_object()
+    
+    def monitor():
+        logging.info("Starting network usage monitoring")
+        previous_usage = get_total_network_usage()
+        
+        while True:
+            try:
+                time.sleep(30)  # Update every 30 seconds for more frequent updates
+                with app.app_context():
+                    from extensions import db
+                    from models import TotalNetworkUsage
+                    
+                    current_usage = get_total_network_usage()
+                    if current_usage and previous_usage:
+                        bytes_sent = max(0, current_usage['bytes_sent'] - previous_usage['bytes_sent'])
+                        bytes_recv = max(0, current_usage['bytes_recv'] - previous_usage['bytes_recv'])
+                        
+                        # Only record if there's actual network activity
+                        if bytes_sent > 0 or bytes_recv > 0:
+                            total_usage = TotalNetworkUsage(
+                                timestamp=current_usage['timestamp'],
+                                bytes_sent=bytes_sent,
+                                bytes_recv=bytes_recv
+                            )
+                            db.session.add(total_usage)
+                            db.session.commit()
+                            logging.debug(f"Recorded network usage: sent={bytes_sent}, recv={bytes_recv}")
+                        
+                        previous_usage = current_usage
+            except Exception as e:
+                logging.error(f"Error in network monitoring: {str(e)}")
+                if 'db' in locals():
+                    db.session.rollback()
+                time.sleep(5)  # Wait before retrying after error
+    
+    monitor_thread = threading.Thread(target=monitor, daemon=True)
+    monitor_thread.start()
+    logging.info("Network usage monitoring thread started")
 
 --------------------------------------------------
 
@@ -1006,534 +946,6 @@ body {
     color: var(--bs-light);
 }
 
---------------------------------------------------
-
-File: ./static/js/main.js
---------------------------------------------------
-Contents of ./static/js/main.js:
-let socket;
-let networkUsageChart = null;
-let deviceDistributionChart = null;
-
-function getCookie(name) {
-    const value = `; ${document.cookie}`;
-    const parts = value.split(`; ${name}=`);
-    if (parts.length === 2) return parts.pop().split(';').shift();
-}
-
-function checkAdminAccess() {
-    fetchWithAuth('/admin')
-        .catch(error => {
-            console.error('Error accessing admin page:', error);
-            window.location.href = '/login';
-        });
-}
-
-function fetchWithAuth(url, options = {}) {
-    options.credentials = 'include';
-
-    return fetch(url, options)
-        .then(response => {
-            console.log('Response status:', response.status);
-            if (response.status === 401) {
-                return fetch('/refresh', { 
-                    method: 'POST',
-                    credentials: 'include'
-                })
-                .then(refreshResponse => {
-                    if (!refreshResponse.ok) {
-                        window.location.href = '/login';
-                        throw new Error('Token refresh failed');
-                    }
-                    return fetch(url, options);
-                })
-                .catch(error => {
-                    console.error('Token refresh failed:', error);
-                    window.location.href = '/login';
-                    throw error;
-                });
-            }
-            if (response.status === 403) {
-                window.location.href = '/login';
-                throw new Error('Access forbidden');
-            }
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            return response;
-        });
-}
-
-function loadDevices() {
-    const deviceList = document.getElementById('device-list');
-    if (!deviceList) return;
-    
-    showLoading();
-    fetchWithAuth('/api/devices')
-        .then(response => response.json())
-        .then(devices => {
-            refreshDeviceList(devices);
-            hideLoading();
-        })
-        .catch(error => {
-            console.error('Error fetching devices:', error);
-            if (deviceList) {
-                deviceList.innerHTML = '<tr><td colspan="7">Error loading devices. Please try again.</td></tr>';
-            }
-            hideLoading();
-        });
-}
-
-function showLoading() {
-    const loadingIndicator = document.getElementById('loading-indicator');
-    if (loadingIndicator) {
-        loadingIndicator.style.display = 'block';
-    }
-}
-
-function hideLoading() {
-    const loadingIndicator = document.getElementById('loading-indicator');
-    if (loadingIndicator) {
-        loadingIndicator.style.display = 'none';
-    }
-}
-
-function showChartLoading() {
-    const containers = document.querySelectorAll('.chart-container');
-    containers.forEach(container => {
-        container.innerHTML = '<div class="d-flex justify-content-center align-items-center" style="height: 300px;"><div class="spinner-border text-primary" role="status"><span class="visually-hidden">Loading...</span></div></div>';
-    });
-}
-
-function showChartError(message) {
-    const containers = document.querySelectorAll('.chart-container');
-    containers.forEach(container => {
-        container.innerHTML = `<div class="alert alert-danger">${message}</div>`;
-    });
-}
-
-function updateDeviceInList(device) {
-    const deviceRow = document.getElementById(`device-${device.id}`);
-    if (deviceRow) {
-        deviceRow.innerHTML = `
-            <td>${device.name}</td>
-            <td>${device.ip_address}</td>
-            <td>${device.mac_address}</td>
-            <td>${device.status ? 'Online' : 'Offline'}</td>
-            <td>${device.last_seen}</td>
-            <td>${(device.data_usage / (1024 * 1024)).toFixed(2)} MB</td>
-            <td>
-                <button class="btn ${device.blocked ? 'btn-success' : 'btn-danger'} btn-sm toggle-device" data-device-id="${device.id}">
-                    ${device.blocked ? 'Unblock' : 'Block'}
-                </button>
-            </td>
-        `;
-    } else {
-        refreshDeviceList([device]);
-    }
-}
-
-function refreshDeviceList(devices) {
-    const deviceList = document.getElementById('device-list');
-    if (!deviceList) return;
-    
-    if (devices.length === 0) {
-        deviceList.innerHTML = '<tr><td colspan="7">No devices found. Try scanning for new devices.</td></tr>';
-    } else {
-        deviceList.innerHTML = '';
-        devices.forEach(device => {
-            const row = document.createElement('tr');
-            row.id = `device-${device.id}`;
-            row.innerHTML = `
-                <td>${device.name}</td>
-                <td>${device.ip_address}</td>
-                <td>${device.mac_address}</td>
-                <td>${device.status ? 'Online' : 'Offline'}</td>
-                <td>${device.last_seen}</td>
-                <td>${(device.data_usage / (1024 * 1024)).toFixed(2)} MB</td>
-                <td>
-                    <button class="btn ${device.blocked ? 'btn-success' : 'btn-danger'} btn-sm toggle-device" data-device-id="${device.id}">
-                        ${device.blocked ? 'Unblock' : 'Block'}
-                    </button>
-                </td>
-            `;
-            deviceList.appendChild(row);
-        });
-    }
-}
-
-function loadNetworkUsageData(timeRange = '24h') {
-    console.log('Loading network usage data for range:', timeRange);
-    showChartLoading();
-    
-    fetchWithAuth(`/api/network_usage?range=${timeRange}`)
-        .then(response => response.json())
-        .then(data => {
-            console.log('Network usage data received:', data);
-            if (data.error) {
-                throw new Error(data.error);
-            }
-            if (!data.devices || !data.labels || !data.values) {
-                throw new Error('Invalid data format received');
-            }
-            renderNetworkUsageChart(data);
-            renderDeviceDistributionChart(data.devices);
-            updateNetworkStats(data);
-        })
-        .catch(error => {
-            console.error('Error fetching network usage data:', error);
-            showChartError('Error loading network usage data. Please try again later.');
-        });
-}
-
-function renderNetworkUsageChart(data) {
-    const ctx = document.getElementById('networkUsageChart');
-    if (!ctx) return;
-
-    const chartData = {
-        labels: data.labels,
-        datasets: [{
-            label: 'Network Usage (MB)',
-            data: data.values,
-            borderColor: 'rgb(75, 192, 192)',
-            backgroundColor: 'rgba(75, 192, 192, 0.2)',
-            tension: 0.1,
-            fill: true
-        }]
-    };
-
-    if (networkUsageChart) {
-        networkUsageChart.destroy();
-    }
-
-    networkUsageChart = new Chart(ctx, {
-        type: 'line',
-        data: chartData,
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            interaction: {
-                intersect: false,
-                mode: 'index'
-            },
-            scales: {
-                x: {
-                    type: 'time',
-                    time: {
-                        unit: 'hour',
-                        displayFormats: {
-                            hour: 'MMM d, HH:mm'
-                        }
-                    },
-                    title: {
-                        display: true,
-                        text: 'Time'
-                    }
-                },
-                y: {
-                    title: {
-                        display: true,
-                        text: 'Usage (MB)'
-                    },
-                    beginAtZero: true
-                }
-            },
-            plugins: {
-                zoom: {
-                    zoom: {
-                        wheel: {
-                            enabled: true
-                        },
-                        pinch: {
-                            enabled: true
-                        },
-                        mode: 'xy'
-                    },
-                    pan: {
-                        enabled: true,
-                        mode: 'xy'
-                    }
-                },
-                tooltip: {
-                    callbacks: {
-                        label: function(context) {
-                            return `Usage: ${context.parsed.y.toFixed(2)} MB`;
-                        }
-                    }
-                }
-            }
-        }
-    });
-
-    document.getElementById('resetZoom')?.addEventListener('click', function() {
-        networkUsageChart.resetZoom();
-    });
-}
-
-function renderDeviceDistributionChart(devices) {
-    const ctx = document.getElementById('deviceDistributionChart');
-    if (!ctx) return;
-
-    const deviceData = devices.map(device => ({
-        name: device.name,
-        usage: device.usage
-    }));
-
-    const data = {
-        labels: deviceData.map(d => d.name),
-        datasets: [{
-            data: deviceData.map(d => d.usage),
-            backgroundColor: [
-                'rgba(255, 99, 132, 0.8)',
-                'rgba(54, 162, 235, 0.8)',
-                'rgba(255, 206, 86, 0.8)',
-                'rgba(75, 192, 192, 0.8)',
-                'rgba(153, 102, 255, 0.8)'
-            ]
-        }]
-    };
-
-    if (deviceDistributionChart) {
-        deviceDistributionChart.destroy();
-    }
-
-    deviceDistributionChart = new Chart(ctx, {
-        type: 'pie',
-        data: data,
-        options: {
-            responsive: true,
-            plugins: {
-                legend: {
-                    position: 'bottom'
-                },
-                tooltip: {
-                    callbacks: {
-                        label: function(context) {
-                            return `${context.label}: ${context.parsed.toFixed(2)} MB`;
-                        }
-                    }
-                }
-            }
-        }
-    });
-}
-
-function updateNetworkStats(data) {
-    const stats = data.statistics;
-    if (!stats) return;
-
-    document.getElementById('totalUsage').textContent = `${stats.total_usage.toFixed(2)} MB`;
-    document.getElementById('peakUsageTime').textContent = stats.peak_usage_time;
-    
-    const trendElement = document.getElementById('usageTrend');
-    if (stats.trend > 0) {
-        trendElement.innerHTML = '<span class="text-success">↑ Increasing</span>';
-    } else if (stats.trend < 0) {
-        trendElement.innerHTML = '<span class="text-danger">↓ Decreasing</span>';
-    } else {
-        trendElement.innerHTML = '<span class="text-warning">→ Stable</span>';
-    }
-
-    document.getElementById('periodComparison').textContent = 
-        `${stats.period_comparison > 0 ? '+' : ''}${stats.period_comparison}% vs previous`;
-}
-
-function updateNetworkUsageChart(data) {
-    if (!data || !data.labels || !data.values) return;
-    
-    networkUsageChart.data.labels = data.labels;
-    networkUsageChart.data.datasets[0].data = data.values;
-    networkUsageChart.update('none');
-}
-
-function updateDeviceDistributionChart(devices) {
-    if (!devices || !devices.length) return;
-    
-    deviceDistributionChart.data.labels = devices.map(d => d.name);
-    deviceDistributionChart.data.datasets[0].data = devices.map(d => d.usage);
-    deviceDistributionChart.update('none');
-}
-
-function initializeTimeRangeButtons() {
-    const buttons = document.querySelectorAll('.time-range-btn');
-    buttons.forEach(button => {
-        button.addEventListener('click', function() {
-            buttons.forEach(btn => btn.classList.remove('active'));
-            this.classList.add('active');
-            loadNetworkUsageData(this.dataset.range);
-        });
-    });
-}
-
-function initializeDeviceSort() {
-    document.querySelectorAll('.sort-devices').forEach(link => {
-        link.addEventListener('click', function(e) {
-            e.preventDefault();
-            const sortBy = this.dataset.sort;
-            const tbody = document.getElementById('deviceTableBody');
-            const rows = Array.from(tbody.getElementsByTagName('tr'));
-
-            rows.sort((a, b) => {
-                let aVal = a.cells[getColumnIndex(sortBy)].textContent;
-                let bVal = b.cells[getColumnIndex(sortBy)].textContent;
-
-                if (sortBy === 'usage') {
-                    aVal = parseFloat(aVal);
-                    bVal = parseFloat(bVal);
-                }
-
-                if (aVal < bVal) return -1;
-                if (aVal > bVal) return 1;
-                return 0;
-            });
-
-            rows.forEach(row => tbody.appendChild(row));
-        });
-    });
-}
-
-function getColumnIndex(sortBy) {
-    switch(sortBy) {
-        case 'name': return 0;
-        case 'usage': return 4;
-        case 'last_seen': return 5;
-        default: return 0;
-    }
-}
-
-function toggleDevice(deviceId) {
-    fetchWithAuth(`/api/devices/${deviceId}/toggle`, { method: 'POST' })
-        .then(response => response.json())
-        .then(result => {
-            if (result.success) {
-                console.log(`Device ${deviceId} toggled successfully`);
-            } else {
-                console.error('Error toggling device:', result.error);
-            }
-        })
-        .catch(error => {
-            console.error('Error toggling device:', error);
-        });
-}
-
-function initializeSocket() {
-    console.log('Initializing Socket.IO');
-    const socketUrl = window.location.origin;
-    console.log('Connecting to WebSocket URL:', socketUrl);
-
-    socket = io(socketUrl, {
-        transports: ['websocket'],
-        auth: {
-            token: getCookie('access_token_cookie')
-        },
-        reconnection: true,
-        reconnectionAttempts: 5,
-        reconnectionDelay: 1000
-    });
-
-    socket.on('connect', function() {
-        console.log('Connected to WebSocket server');
-    });
-
-    socket.on('disconnect', function(reason) {
-        console.log('Disconnected from WebSocket server:', reason);
-    });
-
-    socket.on('connect_error', (error) => {
-        console.error('Socket connection error:', error);
-        if (error.message === 'jwt expired') {
-            fetch('/refresh', { 
-                method: 'POST',
-                credentials: 'include'
-            })
-            .then(response => {
-                if (!response.ok) {
-                    throw new Error('Token refresh failed');
-                }
-                socket.connect();
-            })
-            .catch(() => {
-                window.location.href = '/login';
-            });
-        }
-    });
-
-    socket.on('device_updated', function(device) {
-        console.log('Device update received:', device);
-        updateDeviceInList(device);
-    });
-
-    socket.on('devices_update', function(devices) {
-        console.log('Devices update received:', devices);
-        refreshDeviceList(devices);
-    });
-
-    socket.on('network_usage_update', function(data) {
-        console.log('Network usage update received:', data);
-        if (networkUsageChart) {
-            updateNetworkUsageChart(data);
-        }
-        if (deviceDistributionChart) {
-            updateDeviceDistributionChart(data.devices);
-        }
-        updateNetworkStats(data);
-    });
-}
-
-document.addEventListener('DOMContentLoaded', function() {
-    console.log('DOM Content Loaded');
-    const path = window.location.pathname;
-    const isProtectedPage = ['/devices', '/network_usage'].includes(path);
-
-    if (isProtectedPage) {
-        initializeSocket();
-        if (path === '/devices') {
-            loadDevices();
-        } else if (path === '/network_usage') {
-            loadNetworkUsageData('24h');
-            initializeTimeRangeButtons();
-            initializeDeviceSort();
-        }
-    }
-
-    const deviceList = document.getElementById('device-list');
-    const scanButton = document.getElementById('scan-button');
-
-    if (scanButton) {
-        scanButton.addEventListener('click', function() {
-            showLoading();
-            fetchWithAuth('/api/scan', { method: 'POST' })
-                .then(response => response.json())
-                .then(result => {
-                    if (result.success) {
-                        loadDevices();
-                    } else {
-                        console.error('Scan failed:', result.error);
-                        if (deviceList) {
-                            deviceList.innerHTML = '<tr><td colspan="7">Scan failed. Please try again.</td></tr>';
-                        }
-                    }
-                    hideLoading();
-                })
-                .catch(error => {
-                    console.error('Error during scan:', error);
-                    if (deviceList) {
-                        deviceList.innerHTML = '<tr><td colspan="7">Error during scan. Please try again.</td></tr>';
-                    }
-                    hideLoading();
-                });
-        });
-    }
-
-    if (deviceList) {
-        deviceList.addEventListener('click', function(event) {
-            if (event.target.classList.contains('toggle-device')) {
-                const deviceId = event.target.getAttribute('data-device-id');
-                toggleDevice(deviceId);
-            }
-        });
-    }
-});
 --------------------------------------------------
 
 File: ./static/js/admin.js
@@ -1693,6 +1105,61 @@ document.addEventListener('DOMContentLoaded', function() {
         toggleButton.textContent = device.blocked ? 'Unblock' : 'Block';
     }
 });
+--------------------------------------------------
+
+File: ./static/js/main.js
+--------------------------------------------------
+Contents of ./static/js/main.js:
+// Update the updateDeviceInList function to remove data_usage
+function updateDeviceInList(device) {
+    const deviceRow = document.getElementById(`device-${device.id}`);
+    if (deviceRow) {
+        deviceRow.innerHTML = `
+            <td>${device.name}</td>
+            <td>${device.ip_address}</td>
+            <td>${device.mac_address}</td>
+            <td>${device.status ? 'Online' : 'Offline'}</td>
+            <td>${device.last_seen}</td>
+            <td>
+                <button class="btn ${device.blocked ? 'btn-success' : 'btn-danger'} btn-sm toggle-device" data-device-id="${device.id}">
+                    ${device.blocked ? 'Unblock' : 'Block'}
+                </button>
+            </td>
+        `;
+    } else {
+        refreshDeviceList([device]);
+    }
+}
+
+// Update the refreshDeviceList function to remove data_usage
+function refreshDeviceList(devices) {
+    const deviceList = document.getElementById('device-list');
+    if (!deviceList) return;
+    
+    if (devices.length === 0) {
+        deviceList.innerHTML = '<tr><td colspan="6">No devices found. Try scanning for new devices.</td></tr>';
+    } else {
+        deviceList.innerHTML = '';
+        devices.forEach(device => {
+            const row = document.createElement('tr');
+            row.id = `device-${device.id}`;
+            row.innerHTML = `
+                <td>${device.name}</td>
+                <td>${device.ip_address}</td>
+                <td>${device.mac_address}</td>
+                <td>${device.status ? 'Online' : 'Offline'}</td>
+                <td>${device.last_seen}</td>
+                <td>
+                    <button class="btn ${device.blocked ? 'btn-success' : 'btn-danger'} btn-sm toggle-device" data-device-id="${device.id}">
+                        ${device.blocked ? 'Unblock' : 'Block'}
+                    </button>
+                </td>
+            `;
+            deviceList.appendChild(row);
+        });
+    }
+}
+
 --------------------------------------------------
 
 Directory: ./templates/

@@ -199,24 +199,26 @@ def scan():
             return jsonify({
                 'success': True,
                 'devices': [],
-                'message': 'No devices found. This might be due to network configuration or permissions.'
+                'message': 'No devices found on the network. Please check your network connection.'
             })
 
-        # Update database with found devices
         for device in devices:
-            existing = Device.query.filter_by(mac_address=device['mac_address']).first()
-            if existing:
-                existing.ip_address = device['ip_address']
-                existing.name = device['name']
-                existing.status = device['status']
-                existing.last_seen = device['last_seen']
-            else:
-                new_device = Device(**device)
-                db.session.add(new_device)
-        
-        db.session.commit()
-        
-        # Get updated device list
+            try:
+                existing = Device.query.filter_by(mac_address=device['mac_address']).first()
+                if existing:
+                    existing.ip_address = device['ip_address']
+                    existing.name = device['name']
+                    existing.status = device['status']
+                    existing.last_seen = device['last_seen']
+                else:
+                    new_device = Device(**device)
+                    db.session.add(new_device)
+                db.session.commit()
+            except Exception as e:
+                logging.error(f"Error updating device in database: {e}")
+                db.session.rollback()
+                continue
+
         all_devices = Device.query.all()
         devices_data = [{
             'id': d.id,
@@ -229,18 +231,17 @@ def scan():
         } for d in all_devices]
 
         socketio.emit('devices_update', devices_data)
-        
         return jsonify({
             'success': True,
             'devices': devices_data,
             'message': f'Successfully found {len(devices)} devices'
         })
+
     except Exception as e:
-        logging.error(f"Error during device scan: {str(e)}")
-        db.session.rollback()
+        logging.error(f"Error during device scan: {e}")
         return jsonify({
             'success': False,
-            'message': 'Error during device scan. Please try again.'
+            'message': str(e)
         }), 500
 
 @main.route('/network_usage')

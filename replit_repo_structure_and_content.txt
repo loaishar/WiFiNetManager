@@ -23,86 +23,6 @@ cors = CORS()
 
 --------------------------------------------------
 
-File: ./app.py
---------------------------------------------------
-Contents of ./app.py:
-import os
-from flask import Flask
-import logging
-import eventlet
-from datetime import timedelta
-
-eventlet.monkey_patch()
-
-from extensions import db, jwt, socketio, cors
-from flask_migrate import Migrate
-from routes import main as main_blueprint
-
-def create_app():
-    app = Flask(__name__)
-
-    # Setup logging
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format='%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
-
-    # Setup secret key and database
-    app.secret_key = os.environ.get("FLASK_SECRET_KEY") or "a secret key"
-    app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get("DATABASE_URL")
-    app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
-        "pool_recycle": 300,
-        "pool_pre_ping": True,
-    }
-
-    # Setup JWT
-    app.config["JWT_SECRET_KEY"] = os.environ.get("FLASK_SECRET_KEY") or "jwt secret key"
-    app.config["JWT_TOKEN_LOCATION"] = ["cookies"]
-    app.config["JWT_ACCESS_COOKIE_PATH"] = "/"
-    app.config["JWT_REFRESH_COOKIE_PATH"] = "/refresh"
-    app.config["JWT_COOKIE_CSRF_PROTECT"] = False
-    app.config["JWT_COOKIE_SECURE"] = False  # Set to True in production
-    app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=1)
-    app.config['JWT_REFRESH_TOKEN_EXPIRES'] = timedelta(days=30)
-    app.config['JWT_COOKIE_SAMESITE'] = 'Lax'
-
-    # Initialize extensions
-    db.init_app(app)
-    jwt.init_app(app)
-    cors.init_app(app, supports_credentials=True)
-    socketio.init_app(app, cors_allowed_origins="*", async_mode='eventlet', logger=True, engineio_logger=True)
-    
-    # Initialize Flask-Migrate
-    migrate = Migrate(app, db)
-
-    # Add Socket.IO logging
-    logging.getLogger('socketio').setLevel(logging.DEBUG)
-    logging.getLogger('engineio').setLevel(logging.DEBUG)
-
-    # Register the Blueprint
-    app.register_blueprint(main_blueprint)
-
-    # Initialize database and start monitoring
-    with app.app_context():
-        db.create_all()
-        
-        # Start network monitoring
-        from network_scanner import start_total_usage_monitoring
-        start_total_usage_monitoring()
-
-    # Print URL map for debugging
-    print("URL Map:")
-    print(app.url_map)
-
-    @socketio.on_error_default
-    def default_error_handler(e):
-        app.logger.error(f'An error occurred: {str(e)}')
-
-    return app
-
---------------------------------------------------
-
 File: ./generate_structure.py
 --------------------------------------------------
 Contents of ./generate_structure.py:
@@ -681,6 +601,107 @@ def update_device(device_id):
         return jsonify({'error': 'Internal server error'}), 500
 --------------------------------------------------
 
+File: ./app.py
+--------------------------------------------------
+Contents of ./app.py:
+import os
+from flask import Flask
+import logging
+import eventlet
+from datetime import timedelta
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+
+eventlet.monkey_patch()
+
+from extensions import db, jwt, socketio, cors
+from flask_migrate import Migrate
+from routes import main as main_blueprint
+
+def create_app():
+    app = Flask(__name__)
+
+    # Setup logging for production
+    logging.basicConfig(
+        level=logging.INFO if not app.debug else logging.DEBUG,
+        format='%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]',
+        datefmt='%Y-%m-%d %H:%M:%S',
+        handlers=[
+            logging.StreamHandler(),
+            logging.FileHandler('wifi_manager.log')
+        ]
+    )
+
+    # Setup secret key and database
+    app.secret_key = os.environ.get("FLASK_SECRET_KEY") or os.urandom(24)
+    app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get("DATABASE_URL")
+    app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
+        "pool_recycle": 300,
+        "pool_pre_ping": True,
+    }
+
+    # Setup JWT with secure settings
+    app.config["JWT_SECRET_KEY"] = os.environ.get("FLASK_SECRET_KEY") or os.urandom(24)
+    app.config["JWT_TOKEN_LOCATION"] = ["cookies"]
+    app.config["JWT_ACCESS_COOKIE_PATH"] = "/"
+    app.config["JWT_REFRESH_COOKIE_PATH"] = "/refresh"
+    app.config["JWT_COOKIE_CSRF_PROTECT"] = True
+    app.config["JWT_COOKIE_SECURE"] = not app.debug  # True in production
+    app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=1)
+    app.config['JWT_REFRESH_TOKEN_EXPIRES'] = timedelta(days=30)
+    app.config['JWT_COOKIE_SAMESITE'] = 'Lax'
+
+    # Setup rate limiting
+    limiter = Limiter(
+        app=app,
+        key_func=get_remote_address,
+        default_limits=["200 per day", "50 per hour"],
+        storage_uri="memory://"
+    )
+
+    # Add rate limits for specific endpoints
+    limiter.limit("5/minute")(main_blueprint)
+
+    # Set environment flag
+    app.config['RUNNING_ON_REPLIT'] = os.environ.get('REPL_ID') is not None
+
+    # Initialize extensions
+    db.init_app(app)
+    jwt.init_app(app)
+    cors.init_app(app, supports_credentials=True)
+    socketio.init_app(app, cors_allowed_origins="*", async_mode='eventlet', logger=True, engineio_logger=True)
+    
+    # Initialize Flask-Migrate
+    migrate = Migrate(app, db)
+
+    # Add Socket.IO logging
+    logging.getLogger('socketio').setLevel(logging.INFO)
+    logging.getLogger('engineio').setLevel(logging.INFO)
+
+    # Register the Blueprint
+    app.register_blueprint(main_blueprint)
+
+    # Initialize database and start monitoring
+    with app.app_context():
+        db.create_all()
+        
+        # Start network monitoring
+        from network_scanner import start_total_usage_monitoring
+        start_total_usage_monitoring()
+
+    @socketio.on_error_default
+    def default_error_handler(e):
+        app.logger.error(f'An error occurred: {str(e)}')
+
+    return app
+
+--------------------------------------------------
+
+File: ./image.png
+--------------------------------------------------
+Could not read file: ./image.png. Error: 'utf-8' codec can't decode byte 0x89 in position 0: invalid start byte
+--------------------------------------------------
+
 File: ./network_scanner.py
 --------------------------------------------------
 Contents of ./network_scanner.py:
@@ -692,8 +713,6 @@ from datetime import datetime
 import socket
 import threading
 import time
-import scapy.all as scapy
-from scapy.layers.l2 import ARP, Ether
 import os
 
 def get_network_interfaces():
@@ -714,29 +733,6 @@ def get_network_interfaces():
         logging.error(f"Error getting network interfaces: {str(e)}")
         return []
 
-def get_ip_network():
-    """Get the current network's IP range in CIDR notation."""
-    try:
-        for iface in get_network_interfaces():
-            addrs = netifaces.ifaddresses(iface)
-            if netifaces.AF_INET in addrs:
-                for addr in addrs[netifaces.AF_INET]:
-                    ip = addr['addr']
-                    netmask = addr['netmask']
-                    if not ip.startswith('127.'):
-                        try:
-                            network = ipaddress.IPv4Network(f"{ip}/{netmask}", strict=False)
-                            logging.info(f"Determined network CIDR: {str(network)} for interface {iface}")
-                            return str(network)
-                        except ValueError as e:
-                            logging.warning(f"Invalid network for interface {iface}: {str(e)}")
-                            continue
-        logging.error("No valid network CIDR found")
-        return None
-    except Exception as e:
-        logging.error(f"Error getting IP network: {str(e)}")
-        return None
-
 def get_device_name(ip):
     """Try to get device hostname with improved error handling."""
     try:
@@ -751,44 +747,89 @@ def get_device_name(ip):
     return f"Device-{ip.split('.')[-1]}"
 
 def scan_network():
-    """Scan network for devices with improved logging and error handling."""
+    """Scan network for devices using socket-based scanning."""
     devices = []
     try:
-        network_cidr = get_ip_network()
-        if not network_cidr:
-            logging.error("Could not determine network CIDR")
-            return devices
+        # Get all network interfaces
+        interfaces = get_network_interfaces()
+        if not interfaces:
+            logging.error("No network interfaces found")
+            return []
 
-        logging.info(f"Starting network scan on {network_cidr}")
-        
-        # Create and send ARP request with explicit timeout
-        arp = ARP(pdst=network_cidr)
-        ether = Ether(dst="ff:ff:ff:ff:ff:ff")
-        packet = ether/arp
+        for iface in interfaces:
+            try:
+                addrs = netifaces.ifaddresses(iface)
+                if netifaces.AF_INET not in addrs:
+                    continue
 
-        logging.info("Sending ARP requests...")
-        result = scapy.srp(packet, timeout=1, verbose=True, retry=2)[0]
-        
-        if not result:
-            logging.warning("No devices responded to ARP scan")
-            return devices
+                ip_info = addrs[netifaces.AF_INET][0]
+                ip = ip_info['addr']
+                netmask = ip_info['netmask']
 
-        for sent, received in result:
-            device = {
-                'ip_address': received.psrc,
-                'mac_address': received.hwsrc,
-                'name': get_device_name(received.psrc),
-                'status': True,
-                'blocked': False,
-                'last_seen': datetime.utcnow()
-            }
-            devices.append(device)
-            logging.info(f"Found device: {device['name']} ({device['ip_address']})")
+                # Create network address for scanning
+                network = ipaddress.IPv4Network(f"{ip}/{netmask}", strict=False)
+                logging.info(f"Scanning network {network} on interface {iface}")
+
+                # Scan each host in the network
+                for host in network.hosts():
+                    host_str = str(host)
+                    if host_str == ip:  # Skip our own IP
+                        continue
+
+                    try:
+                        # Try connecting to common ports
+                        for port in [80, 443, 22]:
+                            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                            sock.settimeout(0.1)
+                            if sock.connect_ex((host_str, port)) in [0, 111]:
+                                # Get hostname and MAC address
+                                try:
+                                    hostname = socket.gethostbyaddr(host_str)[0]
+                                except:
+                                    hostname = f"Device-{host_str.split('.')[-1]}"
+
+                                # Get MAC address from ARP cache
+                                mac = None
+                                try:
+                                    with open('/proc/net/arp', 'r') as f:
+                                        lines = f.readlines()[1:]
+                                        for line in lines:
+                                            fields = line.strip().split()
+                                            if fields[0] == host_str:
+                                                mac = fields[3]
+                                                break
+                                except Exception as e:
+                                    logging.debug(f"Could not read ARP cache: {e}")
+
+                                if not mac:
+                                    mac = f"Unknown-{host_str.replace('.', '-')}"
+
+                                device = {
+                                    'ip_address': host_str,
+                                    'mac_address': mac,
+                                    'name': hostname,
+                                    'status': True,
+                                    'blocked': False,
+                                    'last_seen': datetime.utcnow()
+                                }
+                                devices.append(device)
+                                logging.info(f"Found device: {hostname} ({host_str})")
+                                break  # Found a responding port, no need to check others
+
+                            sock.close()
+                    except Exception as e:
+                        logging.debug(f"Error scanning host {host_str}: {e}")
+                        continue
+
+            except Exception as e:
+                logging.error(f"Error scanning interface {iface}: {e}")
+                continue
 
         logging.info(f"Scan completed. Found {len(devices)} devices")
         return devices
+
     except Exception as e:
-        logging.error(f"Error in scan_network: {str(e)}")
+        logging.error(f"Error in network scan: {e}")
         return devices
 
 def get_total_network_usage():
@@ -815,7 +856,7 @@ def start_total_usage_monitoring():
         
         while True:
             try:
-                time.sleep(30)  # Update every 30 seconds for more frequent updates
+                time.sleep(30)  # Update every 30 seconds
                 with app.app_context():
                     from extensions import db
                     from models import TotalNetworkUsage
@@ -825,7 +866,6 @@ def start_total_usage_monitoring():
                         bytes_sent = max(0, current_usage['bytes_sent'] - previous_usage['bytes_sent'])
                         bytes_recv = max(0, current_usage['bytes_recv'] - previous_usage['bytes_recv'])
                         
-                        # Only record if there's actual network activity
                         if bytes_sent > 0 or bytes_recv > 0:
                             total_usage = TotalNetworkUsage(
                                 timestamp=current_usage['timestamp'],
@@ -1084,6 +1124,12 @@ document.addEventListener('DOMContentLoaded', function() {
 File: ./static/js/main.js
 --------------------------------------------------
 Contents of ./static/js/main.js:
+// Define fetchWithAuth function
+function fetchWithAuth(url, options = {}) {
+    options.credentials = 'include';  // Include cookies in the request
+    return fetch(url, options);
+}
+
 document.addEventListener('DOMContentLoaded', function() {
     console.log('DOM Content Loaded');
     
@@ -1092,45 +1138,76 @@ document.addEventListener('DOMContentLoaded', function() {
         scanButton.addEventListener('click', function() {
             const button = this;
             const originalText = button.innerHTML;
+            
+            // Show loading state
             button.disabled = true;
             button.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Scanning...';
             
             console.log('Starting network scan...');
             
-            const resetButton = () => {
-                button.disabled = false;
-                button.innerHTML = originalText;
-            };
-
             fetchWithAuth('/api/scan', { 
                 method: 'POST',
-                timeout: 10000 // 10 second timeout
+                headers: {
+                    'Content-Type': 'application/json',
+                }
             })
-            .then(response => response.json())
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Network response was not ok');
+                }
+                return response.json();
+            })
             .then(data => {
                 console.log('Scan response:', data);
-                if (data.success) {
-                    if (data.devices && data.devices.length > 0) {
-                        console.log(`Found ${data.devices.length} devices`);
-                        refreshDeviceList(data.devices);
-                    } else {
-                        console.log('No devices found');
-                        document.getElementById('device-list').innerHTML = 
-                            '<tr><td colspan="6">No devices found on the network. Please check your network connection.</td></tr>';
-                    }
+                
+                if (!data.devices) {
+                    throw new Error('Invalid response format');
+                }
+                
+                // Update device list
+                const deviceList = document.getElementById('device-list');
+                if (!deviceList) {
+                    throw new Error('Device list element not found');
+                }
+                
+                if (data.devices.length === 0) {
+                    deviceList.innerHTML = '<tr><td colspan="6">No devices found on the network. Please check your network connection.</td></tr>';
                 } else {
-                    throw new Error(data.message || 'Error scanning for devices');
+                    deviceList.innerHTML = '';
+                    data.devices.forEach(device => {
+                        const row = document.createElement('tr');
+                        row.innerHTML = `
+                            <td>${device.name || 'Unknown'}</td>
+                            <td>${device.ip_address}</td>
+                            <td>${device.mac_address}</td>
+                            <td>
+                                <span class="badge bg-${device.status ? 'success' : 'danger'}">
+                                    ${device.status ? 'Online' : 'Offline'}
+                                </span>
+                            </td>
+                            <td>${device.last_seen ? new Date(device.last_seen).toLocaleString() : 'Never'}</td>
+                            <td>
+                                <button class="btn btn-${device.blocked ? 'success' : 'danger'} btn-sm toggle-device" 
+                                        data-device-id="${device.id}">
+                                    ${device.blocked ? 'Unblock' : 'Block'}
+                                </button>
+                            </td>
+                        `;
+                        deviceList.appendChild(row);
+                    });
                 }
             })
             .catch(error => {
                 console.error('Scan error:', error);
-                alert(error.message || 'Error scanning for devices. Please try again.');
-                document.getElementById('device-list').innerHTML = 
-                    '<tr><td colspan="6">Error scanning for devices. Please try again.</td></tr>';
+                const deviceList = document.getElementById('device-list');
+                if (deviceList) {
+                    deviceList.innerHTML = '<tr><td colspan="6">Error scanning for devices. Please try again.</td></tr>';
+                }
             })
             .finally(() => {
-                console.log('Scan completed');
-                resetButton();
+                // Reset button state
+                button.disabled = false;
+                button.innerHTML = originalText;
             });
         });
     }
@@ -1147,26 +1224,39 @@ document.addEventListener('DOMContentLoaded', function() {
             const deviceId = e.target.dataset.deviceId;
             e.target.disabled = true;
             
-            fetchWithAuth(`/api/devices/${deviceId}/toggle`, { method: 'POST' })
-                .then(response => response.json())
-                .then(data => {
-                    if (!data.success) {
-                        throw new Error('Failed to toggle device');
-                    }
-                })
-                .catch(error => {
-                    console.error('Error:', error);
-                    alert('Error toggling device. Please try again.');
-                })
-                .finally(() => {
-                    e.target.disabled = false;
-                });
+            fetchWithAuth(`/api/devices/${deviceId}/toggle`, { 
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                }
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Network response was not ok');
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (!data.success) {
+                    throw new Error('Failed to toggle device');
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Error toggling device. Please try again.');
+            })
+            .finally(() => {
+                e.target.disabled = false;
+            });
         }
     });
 
     function refreshDeviceList(devices) {
         const deviceList = document.getElementById('device-list');
-        if (!deviceList) return;
+        if (!deviceList) {
+            console.error('Device list element not found');
+            return;
+        }
         
         if (!devices || devices.length === 0) {
             deviceList.innerHTML = '<tr><td colspan="6">No devices found. Try scanning for new devices.</td></tr>';
@@ -1174,15 +1264,19 @@ document.addEventListener('DOMContentLoaded', function() {
             deviceList.innerHTML = '';
             devices.forEach(device => {
                 const row = document.createElement('tr');
-                row.id = `device-${device.id}`;
                 row.innerHTML = `
-                    <td>${device.name}</td>
+                    <td>${device.name || 'Unknown'}</td>
                     <td>${device.ip_address}</td>
                     <td>${device.mac_address}</td>
-                    <td>${device.status ? 'Online' : 'Offline'}</td>
-                    <td>${device.last_seen}</td>
                     <td>
-                        <button class="btn ${device.blocked ? 'btn-success' : 'btn-danger'} btn-sm toggle-device" data-device-id="${device.id}">
+                        <span class="badge bg-${device.status ? 'success' : 'danger'}">
+                            ${device.status ? 'Online' : 'Offline'}
+                        </span>
+                    </td>
+                    <td>${device.last_seen ? new Date(device.last_seen).toLocaleString() : 'Never'}</td>
+                    <td>
+                        <button class="btn btn-${device.blocked ? 'success' : 'danger'} btn-sm toggle-device" 
+                                data-device-id="${device.id}">
                             ${device.blocked ? 'Unblock' : 'Block'}
                         </button>
                     </td>
@@ -1197,57 +1291,6 @@ document.addEventListener('DOMContentLoaded', function() {
 
 Directory: ./templates/
 --------------------------------------------------
-File: ./templates/devices.html
---------------------------------------------------
-Contents of ./templates/devices.html:
-{% extends "base.html" %}
-
-{% block content %}
-<h2>Connected Devices</h2>
-<button id="scan-button" class="btn btn-primary mb-3">Scan for new devices</button>
-<div id="loading-indicator" class="text-center my-3" style="display: none;">
-    <div class="spinner-border text-primary" role="status">
-        <span class="visually-hidden">Loading...</span>
-    </div>
-</div>
-<table class="table table-striped">
-    <thead>
-        <tr>
-            <th>Name</th>
-            <th>IP Address</th>
-            <th>MAC Address</th>
-            <th>Status</th>
-            <th>Last Seen</th>
-            <th>Actions</th>
-        </tr>
-    </thead>
-    <tbody id="device-list">
-        <!-- Device list will be populated by JavaScript -->
-    </tbody>
-</table>
-
-<!-- Confirmation Modal -->
-<div class="modal fade" id="confirmModal" tabindex="-1" aria-labelledby="confirmModalLabel" aria-hidden="true">
-  <div class="modal-dialog">
-    <div class="modal-content">
-      <div class="modal-header">
-        <h5 class="modal-title" id="confirmModalLabel">Confirm Action</h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-      </div>
-      <div class="modal-body" id="confirmModalBody">
-        Are you sure you want to proceed?
-      </div>
-      <div class="modal-footer">
-        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-        <button type="button" class="btn btn-primary" id="confirmModalYes">Yes</button>
-      </div>
-    </div>
-  </div>
-</div>
-{% endblock %}
-
---------------------------------------------------
-
 File: ./templates/index.html
 --------------------------------------------------
 Contents of ./templates/index.html:
@@ -1533,6 +1576,54 @@ Contents of ./templates/base.html:
     {% endif %}
 </body>
 </html>
+
+--------------------------------------------------
+
+File: ./templates/devices.html
+--------------------------------------------------
+Contents of ./templates/devices.html:
+{% extends "base.html" %}
+
+{% block content %}
+{% if config.get('RUNNING_ON_REPLIT') %}
+<div class="alert alert-warning" role="alert">
+    <h4 class="alert-heading">Cloud Deployment Notice</h4>
+    <p>This application is running on a cloud platform and cannot scan your local network. For full functionality:</p>
+    <ul>
+        <li>Deploy this application on your local network</li>
+        <li>Run it on a device within your network</li>
+        <li>Ensure proper network permissions</li>
+    </ul>
+    <hr>
+    <p class="mb-0">Currently showing demo data for demonstration purposes.</p>
+</div>
+{% endif %}
+
+<div class="container">
+    <h2>Connected Devices</h2>
+    <button id="scan-button" class="btn btn-primary mb-3">Scan for new devices</button>
+    
+    <div class="table-responsive">
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>IP Address</th>
+                    <th>MAC Address</th>
+                    <th>Status</th>
+                    <th>Last Seen</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody id="device-list">
+                <tr>
+                    <td colspan="6">No devices found. Try scanning for new devices.</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
 
 --------------------------------------------------
 

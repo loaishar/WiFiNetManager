@@ -6,8 +6,6 @@ from datetime import datetime
 import socket
 import threading
 import time
-import scapy.all as scapy
-from scapy.layers.l2 import ARP, Ether
 import os
 
 def get_network_interfaces():
@@ -65,7 +63,7 @@ def get_device_name(ip):
     return f"Device-{ip.split('.')[-1]}"
 
 def scan_network():
-    """Scan network for devices with improved logging and error handling."""
+    """Scan network for devices using socket-based scanning."""
     devices = []
     try:
         network_cidr = get_ip_network()
@@ -75,30 +73,70 @@ def scan_network():
 
         logging.info(f"Starting network scan on {network_cidr}")
         
-        # Create and send ARP request with explicit timeout
-        arp = ARP(pdst=network_cidr)
-        ether = Ether(dst="ff:ff:ff:ff:ff:ff")
-        packet = ether/arp
-
-        logging.info("Sending ARP requests...")
-        result = scapy.srp(packet, timeout=1, verbose=True, retry=2)[0]
+        # Get the network address and subnet
+        network = ipaddress.IPv4Network(network_cidr)
         
-        if not result:
-            logging.warning("No devices responded to ARP scan")
+        # Get our own IP address
+        own_ip = None
+        for iface in get_network_interfaces():
+            addrs = netifaces.ifaddresses(iface)
+            if netifaces.AF_INET in addrs:
+                own_ip = addrs[netifaces.AF_INET][0]['addr']
+                break
+        
+        if not own_ip:
+            logging.error("Could not determine own IP address")
             return devices
-
-        for sent, received in result:
-            device = {
-                'ip_address': received.psrc,
-                'mac_address': received.hwsrc,
-                'name': get_device_name(received.psrc),
-                'status': True,
-                'blocked': False,
-                'last_seen': datetime.utcnow()
-            }
-            devices.append(device)
-            logging.info(f"Found device: {device['name']} ({device['ip_address']})")
-
+            
+        # Scan the network
+        for ip in network.hosts():
+            ip_str = str(ip)
+            
+            # Skip our own IP
+            if ip_str == own_ip:
+                continue
+                
+            try:
+                # Try to establish a connection to check if host is up
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(0.1)  # 100ms timeout
+                result = sock.connect_ex((ip_str, 80))
+                sock.close()
+                
+                if result == 0 or result == 111:  # Connected or Connection refused (host is up)
+                    # Try to get the hostname
+                    name = get_device_name(ip_str)
+                    
+                    # Try to get MAC address from ARP cache
+                    mac_address = None
+                    try:
+                        with open('/proc/net/arp', 'r') as f:
+                            next(f)  # Skip header
+                            for line in f:
+                                fields = line.strip().split()
+                                if fields[0] == ip_str:
+                                    mac_address = fields[3]
+                                    break
+                    except Exception as e:
+                        logging.debug(f"Could not get MAC address for {ip_str}: {str(e)}")
+                    
+                    if not mac_address:
+                        mac_address = f"Unknown-{ip_str.replace('.', '-')}"
+                    
+                    device = {
+                        'ip_address': ip_str,
+                        'mac_address': mac_address,
+                        'name': name,
+                        'status': True,
+                        'blocked': False,
+                        'last_seen': datetime.utcnow()
+                    }
+                    devices.append(device)
+                    logging.info(f"Found device: {name} ({ip_str})")
+            except Exception as e:
+                logging.debug(f"Error scanning {ip_str}: {str(e)}")
+                continue
+                
         logging.info(f"Scan completed. Found {len(devices)} devices")
         return devices
     except Exception as e:

@@ -197,9 +197,10 @@ def scan():
         if not devices:
             logging.warning("No devices found during scan")
             return jsonify({
-                'success': False,
-                'message': 'No devices found. This might be due to insufficient permissions or network configuration.'
-            }), 404
+                'success': True,
+                'devices': [],
+                'message': 'No devices found. This might be due to network configuration or permissions.'
+            })
 
         # Update database with found devices
         for device in devices:
@@ -214,7 +215,6 @@ def scan():
                 db.session.add(new_device)
         
         db.session.commit()
-        logging.info(f"Successfully added/updated {len(devices)} devices")
         
         # Get updated device list
         all_devices = Device.query.all()
@@ -228,19 +228,19 @@ def scan():
             'last_seen': d.last_seen.isoformat() if d.last_seen else None
         } for d in all_devices]
 
-        # Emit update to all clients
         socketio.emit('devices_update', devices_data)
         
         return jsonify({
             'success': True,
-            'devices': devices_data
+            'devices': devices_data,
+            'message': f'Successfully found {len(devices)} devices'
         })
     except Exception as e:
         logging.error(f"Error during device scan: {str(e)}")
         db.session.rollback()
         return jsonify({
             'success': False,
-            'message': 'Error during device scan. Check server logs for details.'
+            'message': 'Error during device scan. Please try again.'
         }), 500
 
 @main.route('/network_usage')

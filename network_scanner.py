@@ -73,7 +73,6 @@ def get_total_network_usage():
         return None
 
 def scan_network():
-    """Scan the network for devices with improved error handling."""
     devices = []
     try:
         network_cidr = get_ip_network()
@@ -83,22 +82,16 @@ def scan_network():
 
         logging.info(f"Starting network scan on {network_cidr}")
         
-        # Run scapy with sudo if needed
-        if os.geteuid() != 0:
-            logging.warning("Scanning may require elevated privileges")
-        
         # Create and send ARP request
         arp = ARP(pdst=network_cidr)
         ether = Ether(dst="ff:ff:ff:ff:ff:ff")
         packet = ether/arp
 
-        try:
-            result = scapy.srp(packet, timeout=3, verbose=True)[0]
-        except Exception as e:
-            logging.error(f"Error during ARP scan: {str(e)}")
+        result = scapy.srp(packet, timeout=3, verbose=False)[0]
+        if not result:
+            logging.warning("No response received from ARP scan")
             return devices
 
-        # Process discovered devices
         for sent, received in result:
             device = {
                 'ip_address': received.psrc,

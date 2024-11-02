@@ -7,6 +7,8 @@ import socket
 import threading
 import time
 import os
+import subprocess
+import re
 
 def get_network_interfaces():
     """Get all active network interfaces."""
@@ -26,18 +28,41 @@ def get_network_interfaces():
         logging.error(f"Error getting network interfaces: {str(e)}")
         return []
 
-def get_device_name(ip):
-    """Try to get device hostname with improved error handling."""
+def get_mac_from_ip(ip_address):
+    """Get MAC address from IP using ARP table."""
     try:
-        hostname = socket.gethostbyaddr(ip)[0]
-        if hostname and not hostname.startswith('_'):
-            logging.debug(f"Resolved hostname for {ip}: {hostname}")
-            return hostname
-    except (socket.herror, socket.gaierror) as e:
-        logging.debug(f"Could not resolve hostname for {ip}: {str(e)}")
-    except Exception as e:
-        logging.error(f"Error getting device name for {ip}: {str(e)}")
-    return f"Device-{ip.split('.')[-1]}"
+        with open('/proc/net/arp', 'r') as f:
+            next(f)  # Skip header
+            for line in f:
+                fields = line.strip().split()
+                if fields[0] == ip_address:
+                    return fields[3]
+    except:
+        pass
+    return None
+
+def get_mac_from_arp(ip_address):
+    """Get MAC address using arp command."""
+    try:
+        if os.name == 'nt':  # Windows
+            process = subprocess.Popen(['arp', '-a', ip_address], stdout=subprocess.PIPE)
+            output = process.communicate()[0].decode()
+            for line in output.splitlines():
+                if ip_address in line:
+                    mac = re.search(r'([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})', line)
+                    if mac:
+                        return mac.group(0)
+        else:  # Linux/Unix
+            process = subprocess.Popen(['arp', '-n', ip_address], stdout=subprocess.PIPE)
+            output = process.communicate()[0].decode()
+            for line in output.splitlines():
+                if ip_address in line:
+                    mac = re.search(r'([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})', line)
+                    if mac:
+                        return mac.group(0)
+    except:
+        pass
+    return None
 
 def scan_network():
     """Scan network for devices using socket-based scanning."""
@@ -70,29 +95,34 @@ def scan_network():
                         continue
 
                     try:
-                        # Try connecting to common ports
-                        for port in [80, 443, 22]:
+                        # Try multiple common ports for better device detection
+                        for port in [80, 443, 22, 5000]:
                             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                             sock.settimeout(0.1)
-                            if sock.connect_ex((host_str, port)) in [0, 111]:
-                                # Get hostname and MAC address
+                            result = sock.connect_ex((host_str, port))
+                            sock.close()
+
+                            if result == 0 or result == 111:  # Connection successful or refused (host is up)
+                                # Try to get hostname
                                 try:
                                     hostname = socket.gethostbyaddr(host_str)[0]
                                 except:
                                     hostname = f"Device-{host_str.split('.')[-1]}"
 
-                                # Get MAC address from ARP cache
+                                # Get MAC address using psutil if available
                                 mac = None
                                 try:
-                                    with open('/proc/net/arp', 'r') as f:
-                                        lines = f.readlines()[1:]
-                                        for line in lines:
-                                            fields = line.strip().split()
-                                            if fields[0] == host_str:
-                                                mac = fields[3]
-                                                break
-                                except Exception as e:
-                                    logging.debug(f"Could not read ARP cache: {e}")
+                                    connections = psutil.net_connections()
+                                    for conn in connections:
+                                        if conn.raddr and conn.raddr[0] == host_str:
+                                            mac = get_mac_from_ip(host_str)
+                                            break
+                                except:
+                                    pass
+
+                                # Fallback to ARP table for MAC address
+                                if not mac:
+                                    mac = get_mac_from_arp(host_str)
 
                                 if not mac:
                                     mac = f"Unknown-{host_str.replace('.', '-')}"
@@ -107,9 +137,8 @@ def scan_network():
                                 }
                                 devices.append(device)
                                 logging.info(f"Found device: {hostname} ({host_str})")
-                                break  # Found a responding port, no need to check others
+                                break  # Found device, no need to check other ports
 
-                            sock.close()
                     except Exception as e:
                         logging.debug(f"Error scanning host {host_str}: {e}")
                         continue
